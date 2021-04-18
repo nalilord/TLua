@@ -1,18 +1,22 @@
-{*******************************************************}
-{                                                       }
-{       TLua - Lua Framework for Delphi                 }
-{                                                       }
-{       Version 1.0                                     }
-{                                                       }
-{       2021-04-16 - 1.0                                }
-{         Digged it out of the code graveyard and made  }
-{         it compile again with the latest Delphi.      }
-{       2012/13-??-?? - 0.1                             }
-{         Initial Release                               }
-{                                                       }
-{       (c) 2021 by NaliLord                            }
-{                                                       }
-{*******************************************************}
+{*****************************************************************}
+{                                                                 }
+{       TLua - Lua Framework for Delphi                           }
+{                                                                 }
+{       Version 1.1                                               }
+{                                                                 }
+{       2021-04-18 - 1.1                                          }
+{         - Added "NewValue" to TLua                              }
+{         - Added "Compare" to TLuaObject                         }
+{         - Added missing setter functionalities for TLuaTable    }
+{       2021-04-16 - 1.0                                          }
+{         Digged it out of the code graveyard and made it compile }
+{         again with the latest Delphi.                           }
+{       2012/13-??-?? - 0.1                                       }
+{         Initial Release                                         }
+{                                                                 }
+{       (c) 2021 by Daniel M. (NaliLord)                          }
+{                                                                 }
+{*****************************************************************}
 
 unit Lua;
 
@@ -46,7 +50,7 @@ type
   TLuaFunctionResults = class;
 
   // Lua exception
-  EqLuaException = class(Exception)
+  ELuaException = class(Exception)
   private
     FName: String;
     FLuaMessage: String;
@@ -57,12 +61,13 @@ type
     property LuaMessage: String read FLuaMessage;
   end;
 
-  EqLuaLoadException = class(EqLuaException);
-  EqLuaExecuteException = class(EqLuaException);
+  ELuaLoadException = class(ELuaException);
+  ELuaExecuteException = class(ELuaException);
 
   // Enums
   TLuaStateStatus = (lssInitialize, lssReady, lssDestroy);
   TLuaObjectAcquisition = (oaNone, oaDefault, oaStackIndex, oaRefId);
+  TLuaCompareOperation = (coEqual, coLessThan, coLessOrEqual);
   TLuaType = (ltNone = -1, ltNil, ltBoolean, ltLightUserdata, ltNumber, ltString, ltTable, ltFunction, ltUserdata,
     ltThread, (* new types *) ltBlueprint, ltClass);
 
@@ -85,7 +90,7 @@ type
   TLuaClassDefaultPropertyEvent = procedure(Sender: TLua; Clazz: TLuaClass; Access, Value: TLuaValue) of object;
 
   // Interfaces
-  IqLuaErrorHandler = interface(IUnknown)
+  ILuaErrorHandler = interface(IUnknown)
     [IID_ILuaErrorHandler]
     procedure OnScriptLoadError(Name, Message: WideString; Code: Integer; LuaMessage: WideString); stdcall;
     procedure OnScriptExecutionError(Name, Message: WideString; Code: Integer; LuaMessage: WideString); stdcall;
@@ -112,8 +117,9 @@ type
     function CheckState(ALua: TLua): Boolean;
     function CopyToRef: Integer;
     function PushToStack: Integer;
-    property Lua: TLua     read FLua;
-    property Typ: TLuaType read GetTyp;
+    function Compare(AValue: TLuaObject; AOperation: TLuaCompareOperation): Boolean;
+    property Lua: TLua       read FLua;
+    property Typ: TLuaType   read GetTyp;
     property TypName: String read GetTypName;
     property RefId: Integer  read FRefId;
   end;
@@ -135,37 +141,6 @@ type
     end;
   private
     FValue: LuaValue;
-    function GetAsBlueprint: TLuaClassBlueprint;
-    function GetAsBool: Boolean;
-    function GetAsClass: TLuaClass;
-    function GetAsFloat: Double;
-    function GetAsFunc: TLuaFunction;
-    function GetAsInt: Int64;
-    function GetAsPtr: Pointer;
-    function GetAsStr: String;
-    function GetAsTable: TLuaTable;
-    function GetIsBlueprint: Boolean;
-    function GetIsBool: Boolean;
-    function GetIsClass: Boolean;
-    function GetIsFloat: Boolean;
-    function GetIsFunc: Boolean;
-    function GetIsInt: Boolean;
-    function GetIsNil: Boolean;
-    function GetIsPtr: Boolean;
-    function GetIsSet: Boolean;
-    function GetIsStr: Boolean;
-    function GetIsTable: Boolean;
-    function GetAsVariant: Variant;
-    procedure SetAsBlueprint(const Value: TLuaClassBlueprint);
-    procedure SetAsBool(const Value: Boolean);
-    procedure SetAsClass(const Value: TLuaClass);
-    procedure SetAsFloat(const Value: Double);
-    procedure SetAsFunc(const Value: TLuaFunction);
-    procedure SetAsInt(const Value: Int64);
-    procedure SetAsPtr(const Value: Pointer);
-    procedure SetAsStr(const Value: String);
-    procedure SetAsTable(const Value: TLuaTable);
-    procedure SetAsVariant(const Value: Variant);
   protected
     procedure Initialize; override;
     procedure UnRef; override;
@@ -178,6 +153,37 @@ type
     class function FromValue(ALua: TLua; AValue: Boolean): TLuaValue; overload;
     class function FromValue(ALua: TLua; AValue: String): TLuaValue; overload;
     class function FromValue(ALua: TLua; AValue: Pointer): TLuaValue; overload;
+    function GetAsBlueprint: TLuaClassBlueprint; virtual;
+    function GetAsBool: Boolean; virtual;
+    function GetAsClass: TLuaClass; virtual;
+    function GetAsFloat: Double; virtual;
+    function GetAsFunc: TLuaFunction; virtual;
+    function GetAsInt: Int64; virtual;
+    function GetAsPtr: Pointer; virtual;
+    function GetAsStr: String; virtual;
+    function GetAsTable: TLuaTable; virtual;
+    function GetIsBlueprint: Boolean; virtual;
+    function GetIsBool: Boolean; virtual;
+    function GetIsClass: Boolean; virtual;
+    function GetIsFloat: Boolean; virtual;
+    function GetIsFunc: Boolean; virtual;
+    function GetIsInt: Boolean; virtual;
+    function GetIsNil: Boolean; virtual;
+    function GetIsPtr: Boolean; virtual;
+    function GetIsSet: Boolean; virtual;
+    function GetIsStr: Boolean; virtual;
+    function GetIsTable: Boolean; virtual;
+    function GetAsVariant: Variant; virtual;
+    procedure SetAsBlueprint(const Value: TLuaClassBlueprint); virtual;
+    procedure SetAsBool(const Value: Boolean); virtual;
+    procedure SetAsClass(const Value: TLuaClass); virtual;
+    procedure SetAsFloat(const Value: Double); virtual;
+    procedure SetAsFunc(const Value: TLuaFunction); virtual;
+    procedure SetAsInt(const Value: Int64); virtual;
+    procedure SetAsPtr(const Value: Pointer); virtual;
+    procedure SetAsStr(const Value: String); virtual;
+    procedure SetAsTable(const Value: TLuaTable); virtual;
+    procedure SetAsVariant(const Value: Variant); virtual;
   public
     destructor Destroy; override;
     procedure Assign(Source: TPersistent); override;
@@ -213,10 +219,20 @@ type
     FIsIndexKey: Boolean;
   protected
     constructor Create(ATable: TLuaTable; AKeyIdx, AValIdx: Integer);
+    procedure SetAsBlueprint(const Value: TLuaClassBlueprint); override;
+    procedure SetAsBool(const Value: Boolean); override;
+    procedure SetAsClass(const Value: TLuaClass); override;
+    procedure SetAsFloat(const Value: Double); override;
+    procedure SetAsFunc(const Value: TLuaFunction); override;
+    procedure SetAsInt(const Value: Int64); override;
+    procedure SetAsPtr(const Value: Pointer); override;
+    procedure SetAsStr(const Value: String); override;
+    procedure SetAsTable(const Value: TLuaTable); override;
+    procedure SetAsVariant(const Value: Variant); override;
   public
     destructor Destroy; override;
-    property IsIndexKey: Boolean  read FIsIndexKey;
-    property Key: TLuaValue     read FKey;
+    property IsIndexKey: Boolean read FIsIndexKey;
+    property Key: TLuaValue      read FKey;
   end;
 
   TLuaTable = class(TLuaObject)
@@ -227,6 +243,7 @@ type
       class function New(K: Variant; V: TLuaTableRecord): KeyValue; static;
     end;
   private
+    FName: String;
     FLastNumIndex: Int64;
     FRecords: TList<KeyValue>;
     FUpdating: Integer;
@@ -250,8 +267,10 @@ type
     procedure SetAsPtr(Key: Variant; const Value: Pointer);
     procedure SetAsStr(Key: Variant; const Value: String);
     procedure SetAsTable(Key: Variant; const Value: TLuaTable);
+    procedure SetName(const Value: String);
   protected
     class function New(ALua: TLua): TLuaTable; overload;
+    class function New(ALua: TLua; AName: String): TLuaTable; overload;
     class function New(ALua: TLua; AIndex: Integer): TLuaTable; overload;
     procedure Initialize; override;
     procedure Iterate;
@@ -263,6 +282,7 @@ type
     destructor Destroy; override;
     procedure BeginUpdate;
     procedure EndUpdate;
+    procedure Update;
     procedure Clear;
     procedure Add(AValue: Variant); overload;
     procedure Add(AValue: TLuaValue); overload;
@@ -271,6 +291,7 @@ type
     function ToString(const AVarName: String = ''): String; reintroduce;
     property Count: Integer                                read GetCount;
     property Records[Index: Integer]: TLuaTableRecord      read GetRecords;                         default;
+    property Name: String                                  read FName          write SetName;
     property AsStr[Key: Variant]: String                   read GetAsStr       write SetAsStr;
     property AsInt[Key: Variant]: Int64                    read GetAsInt       write SetAsInt;
     property AsBool[Key: Variant]: Boolean                 read GetAsBool      write SetAsBool;
@@ -556,21 +577,22 @@ type
   strict protected
     constructor Create(AState: TLuaState); overload;
   protected
-    procedure HandleLuaError(AException: EqLuaException);
+    procedure HandleLuaError(AException: ELuaException);
     procedure NotifyCleanup(ASubject: TObject; AOperation: TOperation);
   public
     class function Acquire(AState: TLuaState): TLua;
     class function Volatile(AState: TLuaState): TLua;
     constructor Create; overload;
     destructor Destroy; override;
-    procedure RegisterErrorHandler(const AErrorHandler: IqLuaErrorHandler);
-    procedure UnregisterErrorHandler(const AErrorHandler: IqLuaErrorHandler);
+    procedure RegisterErrorHandler(const AErrorHandler: ILuaErrorHandler);
+    procedure UnregisterErrorHandler(const AErrorHandler: ILuaErrorHandler);
     procedure RegisterCFunction(AName: String; AFunc: TLuaCFunctionEvent);
     procedure RegisterProcedure(AName: String; AProc: TLuaProcedure);
     procedure RegisterFunction(AName: String; AFunc: TLuaFunctionEvent);
     procedure RegisterMethod(AName: String; AMethod: TLuaMethodEvent);
     function PushRef(ARefId: Integer): Integer;
     function PushAndUnref(ARefId: Integer): Integer;
+    function NewValue(AValue: Variant; AName: String = ''): TLuaValue;
     function NewClass(AName: String): TLuaClassBlueprint;
     function NewTable(AName: String = ''): TLuaTable;
     function NewLibrary(AName: String = ''): TLuaLibrary;
@@ -579,12 +601,12 @@ type
     function Execute: Boolean;
     function ExecuteDirect(ASource: String): Boolean;
     property State: TLuaState                read FState;
-    property IsVolatile: Boolean              read FVolatile;
-    property Globals[Name: String]: Variant   read GetGlobals write SetGlobals;
+    property IsVolatile: Boolean             read FVolatile;
+    property Globals[Name: String]: Variant  read GetGlobals write SetGlobals;
     property Tables[Name: String]: TLuaTable read GetTables  write SetTables;
   published
     property MemoryUsage: NativeInt read FMemoryUsage;
-    property Stack: TLuaStack      read FStack;
+    property Stack: TLuaStack       read FStack;
     property ScriptName: String     read FScriptName   write FScriptName;
     property ScriptSource: TStrings read FScriptSource write SetScriptSource;
   end;
@@ -1606,6 +1628,18 @@ begin
   Result:=FLua.State = ALua.State;
 end;
 
+function TLuaObject.Compare(AValue: TLuaObject; AOperation: TLuaCompareOperation): Boolean;
+begin
+  AValue.PushToStack;
+  PushToStack;
+  try
+    Result:=lua_compare(FLua.State, -1, -2, Ord(AOperation));
+  finally
+    PopFromStack;
+    AValue.PopFromStack;
+  end;
+end;
+
 function TLuaObject.CopyToRef: Integer;
 begin
   PushToStack;
@@ -1686,6 +1720,9 @@ end;
 
 destructor TLuaValue.Destroy;
 begin
+  // Remove the valie from the TLua cleanup list, if it is in there...
+  FLua.NotifyCleanup(Self, opRemove);
+
   inherited;
 end;
 
@@ -2119,6 +2156,142 @@ begin
   inherited;
 end;
 
+procedure TLuaTableRecord.SetAsBlueprint(const Value: TLuaClassBlueprint);
+begin
+end;
+
+procedure TLuaTableRecord.SetAsBool(const Value: Boolean);
+begin
+  // Push table to stack
+  FTable.PushToStack;
+
+  // Set new values
+  FKey.PushToStack;
+  FLua.Stack.PushBoolean(Value);
+  FLua.Stack.SetTable(-3);
+
+  // Remove the table from stack
+  PopFromStack;
+end;
+
+procedure TLuaTableRecord.SetAsClass(const Value: TLuaClass);
+begin
+  // Push table to stack
+  FTable.PushToStack;
+
+  // Set new values
+  FKey.PushToStack;
+  Value.PushToStack;
+  FLua.Stack.SetTable(-3);
+
+  // Remove the table from stack
+  PopFromStack;
+end;
+
+procedure TLuaTableRecord.SetAsFloat(const Value: Double);
+begin
+  // Push table to stack
+  FTable.PushToStack;
+
+  // Set new values
+  FKey.PushToStack;
+  FLua.Stack.PushNumber(Value);
+  FLua.Stack.SetTable(-3);
+
+  // Remove the table from stack
+  PopFromStack;
+end;
+
+procedure TLuaTableRecord.SetAsFunc(const Value: TLuaFunction);
+begin
+  // Push table to stack
+  FTable.PushToStack;
+
+  // Set new values
+  FKey.PushToStack;
+  Value.PushToStack;
+  FLua.Stack.SetTable(-3);
+
+  // Remove the table from stack
+  PopFromStack;
+end;
+
+procedure TLuaTableRecord.SetAsInt(const Value: Int64);
+begin
+  // Push table to stack
+  FTable.PushToStack;
+
+  // Set new values
+  FKey.PushToStack;
+  FLua.Stack.PushInteger(Value);
+  FLua.Stack.SetTable(-3);
+
+  // Remove the table from stack
+  PopFromStack;
+end;
+
+procedure TLuaTableRecord.SetAsPtr(const Value: Pointer);
+begin
+  // Push table to stack
+  FTable.PushToStack;
+
+  // Set new values
+  FKey.PushToStack;
+  FLua.Stack.PushPointer(Value);
+  FLua.Stack.SetTable(-3);
+
+  // Remove the table from stack
+  PopFromStack;
+end;
+
+procedure TLuaTableRecord.SetAsStr(const Value: string);
+begin
+  // Push table to stack
+  FTable.PushToStack;
+
+  // Set new values
+  FKey.PushToStack;
+  FLua.Stack.PushString(Value);
+  FLua.Stack.SetTable(-3);
+
+  // Remove the table from stack
+  PopFromStack;
+end;
+
+procedure TLuaTableRecord.SetAsTable(const Value: TLuaTable);
+begin
+  // Do not allow to set the table to itself, this will fuck up things...
+  if FTable.Compare(Value, coEqual) then
+  begin
+    raise ELuaException.Create('Table recursion prevented!');
+  end;
+
+  // Push table to stack
+  FTable.PushToStack;
+
+  // Set new values
+  FKey.PushToStack;
+  Value.PushToStack;
+  FLua.Stack.SetTable(-3);
+
+  // Remove the table from stack
+  PopFromStack;
+end;
+
+procedure TLuaTableRecord.SetAsVariant(const Value: Variant);
+begin
+  // Push table to stack
+  FTable.PushToStack;
+
+  // Set new values
+  FKey.PushToStack;
+  FLua.Stack.PushVariant(Value);
+  FLua.Stack.SetTable(-3);
+
+  // Remove the table from stack
+  PopFromStack;
+end;
+
 { TLuaTable.KeyValue }
 
 class function TLuaTable.KeyValue.New(K: Variant; V: TLuaTableRecord): KeyValue;
@@ -2141,6 +2314,12 @@ begin
   end;
 end;
 
+class function TLuaTable.New(ALua: TLua; AName: String): TLuaTable;
+begin
+  Result:=New(ALua);
+  Result.Name:=AName;
+end;
+
 class function TLuaTable.New(ALua: TLua; AIndex: Integer): TLuaTable;
 begin
   Result:=TLuaTable.Create(ALua, oaStackIndex, AIndex);
@@ -2148,47 +2327,105 @@ end;
 
 procedure TLuaTable.SetAsBlueprint(Key: Variant; const Value: TLuaClassBlueprint);
 begin
-
 end;
 
 procedure TLuaTable.SetAsBool(Key: Variant; const Value: Boolean);
+var
+  Entry: TLuaTableRecord;
 begin
-
+  if GetRecordByKey(Key, Entry) then
+  begin
+    Entry.AsBool:=Value;
+    Update;
+  end;
 end;
 
 procedure TLuaTable.SetAsClass(Key: Variant; const Value: TLuaClass);
+var
+  Entry: TLuaTableRecord;
 begin
-
+  if GetRecordByKey(Key, Entry) then
+  begin
+    Entry.AsClass:=Value;
+    Update;
+  end;
 end;
 
 procedure TLuaTable.SetAsFloat(Key: Variant; const Value: Double);
+var
+  Entry: TLuaTableRecord;
 begin
-
+  if GetRecordByKey(Key, Entry) then
+  begin
+    Entry.AsFloat:=Value;
+    Update;
+  end;
 end;
 
 procedure TLuaTable.SetAsFunc(Key: Variant; const Value: TLuaFunction);
+var
+  Entry: TLuaTableRecord;
 begin
-
+  if GetRecordByKey(Key, Entry) then
+  begin
+    Entry.AsFunc:=Value;
+    Update;
+  end;
 end;
 
 procedure TLuaTable.SetAsInt(Key: Variant; const Value: Int64);
+var
+  Entry: TLuaTableRecord;
 begin
-
+  if GetRecordByKey(Key, Entry) then
+  begin
+    Entry.AsInt:=Value;
+    Update;
+  end;
 end;
 
 procedure TLuaTable.SetAsPtr(Key: Variant; const Value: Pointer);
+var
+  Entry: TLuaTableRecord;
 begin
-
+  if GetRecordByKey(Key, Entry) then
+  begin
+    Entry.AsPtr:=Value;
+    Update;
+  end;
 end;
 
 procedure TLuaTable.SetAsStr(Key: Variant; const Value: String);
+var
+  Entry: TLuaTableRecord;
 begin
-
+  if GetRecordByKey(Key, Entry) then
+  begin
+    Entry.AsStr:=Value;
+    Update;
+  end;
 end;
 
 procedure TLuaTable.SetAsTable(Key: Variant; const Value: TLuaTable);
+var
+  Entry: TLuaTableRecord;
 begin
+  if GetRecordByKey(Key, Entry) then
+  begin
+    Entry.AsTable:=Value;
+    Update;
+  end;
+end;
 
+procedure TLuaTable.SetName(const Value: String);
+begin
+  FName:=Value;
+
+  // If we have a name, register the table in globals
+  if FName <> '' then
+  begin
+    FLua.SetTables(FName, Self);
+  end;
 end;
 
 procedure TLuaTable.Add(AValue: Variant);
@@ -2207,11 +2444,8 @@ begin
   // Remove the table from stack
   PopFromStack;
 
-  // Reiterate the table
-  if FUpdating = 0 then
-  begin
-    Iterate;
-  end;
+  // Update table
+  Update;
 end;
 
 procedure TLuaTable.Add(AValue: TLuaValue);
@@ -2232,11 +2466,8 @@ begin
     // Remove the table from stack
     PopFromStack;
 
-    // Reiterate the table
-    if FUpdating = 0 then
-    begin
-      Iterate;
-    end;
+    // Update table
+    Update;
   end;
 end;
 
@@ -2253,11 +2484,8 @@ begin
   // Remove the table from stack
   PopFromStack;
 
-  // Reiterate the table
-  if FUpdating = 0 then
-  begin
-    Iterate;
-  end;
+  // Update table
+  Update;
 end;
 
 
@@ -2276,11 +2504,8 @@ begin
     // Remove the table from stack
     PopFromStack;
 
-    // Reiterate the table
-    if FUpdating = 0 then
-    begin
-      Iterate;
-    end;
+    // Update table
+    Update;
   end;
 end;
 
@@ -2443,6 +2668,15 @@ begin
   WriteTableToStr(Self, Ident);
 
   Result:=Result + '};' + #13#10;
+end;
+
+procedure TLuaTable.Update;
+begin
+  // Reiterate the table
+  if FUpdating = 0 then
+  begin
+    Iterate;
+  end;
 end;
 
 function TLuaTable.GetAsBlueprint(Key: Variant): TLuaClassBlueprint;
@@ -2687,16 +2921,16 @@ begin
     // Execute the function
     Res:=lua_pcall(FLua.State, FArgs.Count, LUA_MULTRET, 0);
     case Res of
-      LUA_ERRRUN: raise EqLuaExecuteException.Create('Runtime error');
-      LUA_ERRMEM: raise EqLuaExecuteException.Create('Memory allocation error');
-      LUA_ERRSYNTAX: raise EqLuaExecuteException.Create('Syntax error');
-      LUA_ERRERR: raise EqLuaExecuteException.Create('Error handling function failed');
+      LUA_ERRRUN: raise ELuaExecuteException.Create('Runtime error');
+      LUA_ERRMEM: raise ELuaExecuteException.Create('Memory allocation error');
+      LUA_ERRSYNTAX: raise ELuaExecuteException.Create('Syntax error');
+      LUA_ERRERR: raise ELuaExecuteException.Create('Error handling function failed');
     end;
 
     // Set result
     Result:=Res = LUA_OK;
   except
-    on E: EqLuaException do
+    on E: ELuaException do
     begin
       // Set exception props
       E.FName:='<anonymous function>';
@@ -3851,16 +4085,16 @@ begin
     // Execute the function
     Res:=FLua.Stack.PCall(FArgs.Count + 1, LUA_MULTRET, 0);
     case Res of
-      LUA_ERRRUN: raise EqLuaExecuteException.Create('Runtime error');
-      LUA_ERRMEM: raise EqLuaExecuteException.Create('Memory allocation error');
-      LUA_ERRSYNTAX: raise EqLuaExecuteException.Create('Syntax error');
-      LUA_ERRERR: raise EqLuaExecuteException.Create('Error handling function failed');
+      LUA_ERRRUN: raise ELuaExecuteException.Create('Runtime error');
+      LUA_ERRMEM: raise ELuaExecuteException.Create('Memory allocation error');
+      LUA_ERRSYNTAX: raise ELuaExecuteException.Create('Syntax error');
+      LUA_ERRERR: raise ELuaExecuteException.Create('Error handling function failed');
     end;
 
     // Set result
     Result:=Res = LUA_OK;
   except
-    on E: EqLuaException do
+    on E: ELuaException do
     begin
       // Set exception props
       E.FName:=FInvoker.C.Blueprint.Name + ':' + FInvoker.N;
@@ -4210,27 +4444,27 @@ begin
     Res:=luaL_loadbuffer(FState, PAnsiChar(AnsiString(Trim(FScriptSource.Text))), Trim(FScriptSource.Text).Length, PAnsiChar(AnsiString(FScriptName)));
 
     case Res of
-      LUA_ERRSYNTAX: raise EqLuaLoadException.Create('Syntax error during precompilation');
-      LUA_ERRMEM: raise EqLuaLoadException.Create('Memory allocation error');
+      LUA_ERRSYNTAX: raise ELuaLoadException.Create('Syntax error during precompilation');
+      LUA_ERRMEM: raise ELuaLoadException.Create('Memory allocation error');
     end;
 
     if Res <> LUA_OK then
     begin
-      raise EqLuaLoadException.Create('Cannot load buffer for script');
+      raise ELuaLoadException.Create('Cannot load buffer for script');
     end;
 
     Res:=lua_pcall(FState, 0, LUA_MULTRET, 0);
 
     case Res of
-      LUA_ERRRUN: raise EqLuaExecuteException.Create('Runtime error');
-      LUA_ERRMEM: raise EqLuaExecuteException.Create('Memory allocation error');
-      LUA_ERRSYNTAX: raise EqLuaExecuteException.Create('Syntax error');
-      LUA_ERRERR: raise EqLuaExecuteException.Create('Error handling function failed');
+      LUA_ERRRUN: raise ELuaExecuteException.Create('Runtime error');
+      LUA_ERRMEM: raise ELuaExecuteException.Create('Memory allocation error');
+      LUA_ERRSYNTAX: raise ELuaExecuteException.Create('Syntax error');
+      LUA_ERRERR: raise ELuaExecuteException.Create('Error handling function failed');
     end;
 
     Result:=Res = LUA_OK;
   except
-    on E: EqLuaException do
+    on E: ELuaException do
     begin
       // Set exception props
       E.FName:=FScriptName;
@@ -4276,6 +4510,7 @@ begin
     if FStack.IsTable(-1) then
     begin
       Result:=TLuaTable.New(Self, -1);
+      Result.FName:=Name;
 
       FCleanupList.Add(Result);
     end;
@@ -4294,6 +4529,24 @@ begin
     FScriptSource.LoadFromFile(AFileName);
 
     Result:=True;
+  end;
+end;
+
+function TLua.NewValue(AValue: Variant; AName: String = ''): TLuaValue;
+begin
+  Result:=nil;
+
+  try
+    Result:=TLuaValue.Clear(Self);
+    Result.AsVariant:=AValue;
+
+    if AName <> '' then
+    begin
+      Result.PushToStack;
+      FStack.SetGlobal(AName);
+    end;
+  finally
+    FCleanupList.Add(Result);
   end;
 end;
 
@@ -4324,7 +4577,7 @@ begin
   Result:=nil;
 
   try
-    Result:=TLuaTable.New(Self);
+    Result:=TLuaTable.New(Self, AName);
   finally
     FCleanupList.Add(Result);
   end;
@@ -4452,24 +4705,24 @@ begin
   FStack.SetGlobal(Name);
 end;
 
-procedure TLua.HandleLuaError(AException: EqLuaException);
+procedure TLua.HandleLuaError(AException: ELuaException);
 var
   I: Integer;
 begin
   for I:=0 to FErrorHandlers.Count - 1 do
   begin
-    if AException IS EqLuaLoadException then
+    if AException IS ELuaLoadException then
     begin
-      IqLuaErrorHandler(FErrorHandlers[I]).OnScriptLoadError(AException.Name, AException.Message, AException.Code, AException.LuaMessage);
+      ILuaErrorHandler(FErrorHandlers[I]).OnScriptLoadError(AException.Name, AException.Message, AException.Code, AException.LuaMessage);
     end else
-    if AException IS EqLuaExecuteException then
+    if AException IS ELuaExecuteException then
     begin
-      IqLuaErrorHandler(FErrorHandlers[I]).OnScriptExecutionError(AException.Name, AException.Message, AException.Code, AException.LuaMessage);
+      ILuaErrorHandler(FErrorHandlers[I]).OnScriptExecutionError(AException.Name, AException.Message, AException.Code, AException.LuaMessage);
     end;
   end;
 end;
 
-procedure TLua.RegisterErrorHandler(const AErrorHandler: IqLuaErrorHandler);
+procedure TLua.RegisterErrorHandler(const AErrorHandler: ILuaErrorHandler);
 begin
   if FErrorHandlers.IndexOf(AErrorHandler) < 0 then
   begin
@@ -4477,7 +4730,7 @@ begin
   end;
 end;
 
-procedure TLua.UnregisterErrorHandler(const AErrorHandler: IqLuaErrorHandler);
+procedure TLua.UnregisterErrorHandler(const AErrorHandler: ILuaErrorHandler);
 begin
   if FErrorHandlers.IndexOf(AErrorHandler) >= 0 then
   begin
@@ -4907,7 +5160,7 @@ begin
     FValues.Add(TLuaValue.New(FLua, I));
     if FCount <> FLua.Stack.Top then
     begin
-      raise EqLuaExecuteException.Create('Stack manipulation error triggered, was ' + IntToStr(FCount) + ' now is ' + IntToStr(FLua.Stack.Top) + '.'#13#10'Inconsistent data, abort!');
+      raise ELuaExecuteException.Create('Stack manipulation error triggered, was ' + IntToStr(FCount) + ' now is ' + IntToStr(FLua.Stack.Top) + '.'#13#10'Inconsistent data, abort!');
     end;
   end;
 

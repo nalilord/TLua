@@ -76,6 +76,8 @@ var
   Clazz: TLuaClassBlueprint;
   Thread: TLuaThread;
   Lib: TLuaLibrary;
+  TableA, TableB: TLuaTable;
+  ValA, ValB: TLuaValue;
 begin
   Lua:=TLua.Create;
 
@@ -142,21 +144,72 @@ begin
   WriteLn('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~');
 
   // ******************
+  // * Misc Tests
+  // ******************
+
+  ValA:=Lua.NewValue(1337);
+  ValB:=Lua.NewValue($B00B, 'gnihihi');
+
+  WriteLn('Compare A-B LT  : ', ValA.Compare(ValB, coLessThan));
+  WriteLn('Compare A-B LoE : ', ValA.Compare(ValB, coLessOrEqual));
+  WriteLn('Compare B-A LT  : ', ValB.Compare(ValA, coLessThan));
+  WriteLn('Compare B-A LoE : ', ValB.Compare(ValA, coLessOrEqual));
+
+  ValA.Free;
+  ValB.Free;
+
+  WriteLn('Global Value B: ', Lua.Globals['gnihihi']);
+
+  // ******************
   // * Table test
   // ******************
 
   WriteLn('--------------------------- Tables from Code ---------------------------');
 
-  WriteLn('Declared table count: ', Lua.Tables['table'].Count);
+  // Create a table and register it as global by name, if no name is supplied the table will not be registed in globals
+  TableA:=Lua.NewTable('table_new');
+  TableA.Add('foo', 'bar');
+  TableA.Free;
 
-  Lua.Tables['table'].BeginUpdate;
-  Lua.Tables['table'].Add('#1');
-  Lua.Tables['table'].Add('#2');
-  Lua.Tables['table'].Add('#3');
-  Lua.Tables['table'].EndUpdate;
+  // Now get the table again, we only do this for testing global/registering functionality
+  TableA:=Lua.Tables['table_new'];
 
-  WriteLn('Table: ', Lua.Tables['table'].ToString);
-  WriteLn('Key: [3] = ', Lua.Tables['table'].AsStr[3]);
+  // Get the table
+  TableB:=Lua.Tables['table'];
+
+  WriteLn('Declared table field count: ', TableA.Count);
+
+  // Add some fields
+  TableB.BeginUpdate; // This will prevent the internal structure from updating with every change, so it's just for performance!
+  TableB.Add('#1');
+  TableB.Add('#2');
+  TableB.Add('#3');
+  TableB.EndUpdate;
+
+  WriteLn('Table: ', TableB.ToString);
+  WriteLn('Declared table field count: ', TableB.Count);
+  WriteLn('Key: [3] = ', TableB.AsStr[3]);
+
+  TableB.Records[0].AsTable:=TableA; // Updating a record directly will not trigger a table update, as you can see in the next line
+  WriteLn('Records[0]: ', TableB.Records[0].AsVariant); // Record 0 still contains the string "FooBar" which was set by initializing the table in lua
+  TableB.Update; // Force table update
+  WriteLn('Records[0]: ', TableB.Records[0].AsVariant);
+  WriteLn('Records[0]: ', TableB.Records[0].AsTable.ToString);
+
+  // Update fields
+  TableB.BeginUpdate;
+  TableB.AsStr[2]:='Changed Value #1';
+  TableB.AsStr[3]:='Changed Value #2';
+  TableB.AsStr[4]:='Changed Value #3';
+  TableB.EndUpdate;
+
+  WriteLn('Table: ', TableB.ToString);
+  WriteLn('Declared table field count: ', TableB.Count);
+  WriteLn('Key: [3] = ', TableB.AsStr[3]);
+
+  // We are done with this table(s), release the native object instance
+  TableA.Free;
+  TableB.Free;
 
   WriteLn('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~');
 

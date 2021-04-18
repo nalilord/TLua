@@ -973,7 +973,7 @@ begin
   begin
     if lua_isstring(L, -2) then
     begin
-      if AnsiStartsText('__', AnsiString(lua_tostring(L, -2))) then
+      if AnsiStartsText('__', String(AnsiString(lua_tostring(L, -2)))) then
         t:=m
       else
         t:=d;
