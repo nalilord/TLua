@@ -101,7 +101,11 @@ interface
 
 const
 {$IFDEF MSWINDOWS}
+  {$IFNDEF CPUX64}
    LUA_LIB_NAME = 'lua54.dll';
+  {$ELSE}
+   LUA_LIB_NAME = 'lua54_64.dll';
+  {$ENDIF}
 {$ELSE}
    LUA_LIB_NAME = 'liblua54.so';
 {$ENDIF}
@@ -109,9 +113,9 @@ const
 const
    LUA_VERSION_MAJOR   = '5';
    LUA_VERSION_MINOR   = '4';
-   LUA_VERSION_RELEASE = '0';
+   LUA_VERSION_RELEASE = '3';
    LUA_VERSION_NUM     = 504;
-   LUA_VERSION_RELEASE_NUM = LUA_VERSION_NUM * 100 + 0;
+   LUA_VERSION_RELEASE_NUM = LUA_VERSION_NUM * 100 + 3;
    LUA_VERSION_        = 'Lua ' + LUA_VERSION_MAJOR + '.' + LUA_VERSION_MINOR; // LUA_VERSION was suffixed by '_' for avoiding name collision
    LUA_RELEASE         = LUA_VERSION_ + '.' + LUA_VERSION_RELEASE;
    LUA_COPYRIGHT       = LUA_RELEASE + '  Copyright (C) 1994-2015 Lua.org, PUC-Rio';
@@ -155,7 +159,16 @@ type
    lua_Number   = Double;
    Plua_Number  = ^lua_Number;
 
+{$IFNDEF CPUX64}
    size_t = Cardinal;
+{$ELSE}
+  {$IF CompilerVersion < 18}
+   size_t = Int64;
+  {$ELSE}
+   size_t = UInt64;
+  {$IFEND}
+{$IFEND}
+
    Psize_t = ^size_t;
 
    Plua_State = Pointer;
@@ -401,7 +414,7 @@ const
    LUA_IDSIZE = 60;
 
 type
-   lua_Debug = packed record     (* activation record *)
+   lua_Debug = record     (* activation record *)
       event: Integer;
       name: PAnsiChar;           (* (n) *)
       namewhat: PAnsiChar;       (* (n) `global', `local', `field', `method' *)
@@ -448,7 +461,7 @@ const
    LUAL_NUMSIZES = sizeof(lua_Integer)*16 + sizeof(lua_Number);
 
 type
-   luaL_Reg = packed record
+   luaL_Reg = record
       name: PAnsiChar;
       func: lua_CFunction;
    end;

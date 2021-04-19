@@ -35,6 +35,8 @@ implementation
 
 {$R *.dfm}
 
+{ Global }
+
 procedure LuaOut(Sender: TLua; Args: TLuaArgs; Results: TLuaResults);
 var
   I: Integer;
@@ -50,6 +52,7 @@ begin
     end;
   end;
 end;
+
 procedure LuaTestFunc1(Sender: TLua; Args: TLuaArgs; Results: TLuaResults);
 var
   I: Integer;
@@ -69,6 +72,8 @@ begin
 
   Results.PushStr('LuaTestFunc1');
 end;
+
+{ TfrmMain }
 
 procedure TfrmMain.btnExecuteClick(Sender: TObject);
 var
@@ -166,7 +171,7 @@ begin
 
   WriteLn('--------------------------- Tables from Code ---------------------------');
 
-  // Create a table and register it as global by name, if no name is supplied the table will not be registed in globals
+  // Create a table and register it as global by name, if no name is supplied the table will not be registered in globals
   TableA:=Lua.NewTable('table_new');
   TableA.Add('foo', 'bar');
   TableA.Free;

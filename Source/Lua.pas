@@ -1,22 +1,22 @@
-{*****************************************************************}
-{                                                                 }
-{       TLua - Lua Framework for Delphi                           }
-{                                                                 }
-{       Version 1.1                                               }
-{                                                                 }
-{       2021-04-18 - 1.1                                          }
-{         - Added "NewValue" to TLua                              }
-{         - Added "Compare" to TLuaObject                         }
-{         - Added missing setter functionalities for TLuaTable    }
-{       2021-04-16 - 1.0                                          }
-{         Digged it out of the code graveyard and made it compile }
-{         again with the latest Delphi.                           }
-{       2012/13-??-?? - 0.1                                       }
-{         Initial Release                                         }
-{                                                                 }
-{       (c) 2021 by Daniel M. (NaliLord)                          }
-{                                                                 }
-{*****************************************************************}
+{***************************************************************************}
+{                                                                           }
+{       TLua - Lua Framework for Delphi                                     }
+{                                                                           }
+{       Version 1.1                                                         }
+{                                                                           }
+{       2021-04-18 - 1.1                                                    }
+{         - Added "NewValue" to TLua                                        }
+{         - Added "Compare" to TLuaObject                                   }
+{         - Added missing setter functionalities for TLuaTable              }
+{       2021-04-16 - 1.0                                                    }
+{         Digged it out of the code graveyard and made it compile           }
+{         again with the latest Delphi.                                     }
+{       2012/13-??-?? - 0.1                                                 }
+{         Initial Release                                                   }
+{                                                                           }
+{       (c) 2021 by Daniel M. (NaliLord)                                    }
+{                                                                           }
+{***************************************************************************}
 
 unit Lua;
 
