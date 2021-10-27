@@ -2,17 +2,22 @@
 {                                                                           }
 {       TLua - Lua Framework for Delphi                                     }
 {                                                                           }
-{       Version 1.1                                                         }
+{       Version 1.2                                                         }
 {                                                                           }
+{       2021-10-27 - 1.2                                                    }
+{         - Fixed rnd AV on free of TLua when using Classes and Blueprints  }
+{         - Fixed mem leak caused by Callback handlers not beeing freed     }
+{         ! Changed the free order of objects                               }
+{         ! Callback handlers now getting freed after the state is closed   }
 {       2021-04-18 - 1.1                                                    }
-{         - Added "NewValue" to TLua                                        }
-{         - Added "Compare" to TLuaObject                                   }
-{         - Added missing setter functionalities for TLuaTable              }
+{         + Added "NewValue" to TLua                                        }
+{         + Added "Compare" to TLuaObject                                   }
+{         + Added missing setter functionalities for TLuaTable              }
 {       2021-04-16 - 1.0                                                    }
-{         Digged it out of the code graveyard and made it compile           }
-{         again with the latest Delphi.                                     }
+{         ! Digged it out of the code graveyard and made it compile         }
+{           again with the latest Delphi.                                   }
 {       2012/13-??-?? - 0.1                                                 }
-{         Initial Release                                                   }
+{         ! Initial Release                                                 }
 {                                                                           }
 {       (c) 2021 by Daniel M. (NaliLord)                                    }
 {                                                                           }
