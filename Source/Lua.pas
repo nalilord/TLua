@@ -413,6 +413,7 @@ type
     constructor Create(ABlueprint: TLuaClassBlueprint; AName: String); overload;
     procedure Initialize; override;
     procedure Finalize;
+    procedure CleanupInstances;
     procedure CopyMethods(ASource: TList<MethodEntry>);
     procedure CopyProperties(ASource: TList<PropertyEntry>);
     procedure CopyIndexProperties(ASource: TList<IndexPropertyEntry>);
@@ -577,6 +578,7 @@ type
   strict protected
     constructor Create(AState: TLuaState); overload;
   protected
+    procedure PreCleanup;
     procedure HandleLuaError(AException: ELuaException);
     procedure NotifyCleanup(ASubject: TObject; AOperation: TOperation);
   public
@@ -792,6 +794,7 @@ type
     end;
   strict private // Global class var
     class var CallbackWrappers: TList<TLuaCallbackWrapper>;
+    class var CallbackWrappersRelease: TList<TLuaCallbackWrapper>;
   strict private // Prevent showing class fields
     FCallback: TLuaCFunctionEvent;
     FCallbackMethod: TLuaClassMethodCallback;
@@ -814,6 +817,8 @@ type
     class function New(AClassDefaultPropertyGet, AClassDefaultPropertySet: TLuaClassDefaultPropertyEvent): TLuaCallbackWrapper; overload;
     class function New(AClassIndexProperty: TLuaClassIndexProperty): TLuaCallbackWrapper; overload;
     class procedure Release(ACallback: TLuaCFunctionEvent);
+    class procedure PrepareRelease(ACallback: TLuaCFunctionEvent);
+    class procedure CleanupRelease;
     destructor Destroy; override;
     property Callback: TLuaCFunctionEvent read FCallback;
   end;
@@ -1172,10 +1177,12 @@ end;
 class procedure TLuaCallbackWrapper.Initialize;
 begin
   TLuaCallbackWrapper.CallbackWrappers:=TList<TLuaCallbackWrapper>.Create;
+  TLuaCallbackWrapper.CallbackWrappersRelease:=TList<TLuaCallbackWrapper>.Create;
 end;
 
 class procedure TLuaCallbackWrapper.Finalize;
 begin
+  FreeAndNil(TLuaCallbackWrapper.CallbackWrappersRelease);
   FreeAndNil(TLuaCallbackWrapper.CallbackWrappers);
 end;
 
@@ -1258,6 +1265,22 @@ begin
   begin
     FWrapperEvents.Event:=lceClassIndexProperty;
     FWrapperEvents.ClassIndexProperty:=AClassIndexProperty;
+  end;
+end;
+
+class procedure TLuaCallbackWrapper.PrepareRelease(ACallback: TLuaCFunctionEvent);
+var
+  I: Integer;
+begin
+  for I:=0 to CallbackWrappers.Count - 1 do
+  begin
+    if @CallbackWrappers[I].Callback = @ACallback then
+    begin
+      CallbackWrappersRelease.Add(CallbackWrappers[I]);
+      CallbackWrappers.Delete(I);
+
+      Break;
+    end;
   end;
 end;
 
@@ -1575,6 +1598,21 @@ begin
     begin
       Lua.Free;
     end;
+  end;
+end;
+
+class procedure TLuaCallbackWrapper.CleanupRelease;
+var
+  I: Integer;
+begin
+  try
+    for I:=0 to CallbackWrappersRelease.Count - 1 do
+    try
+      CallbackWrappersRelease[I].Free;
+    except
+    end;
+  finally
+    CallbackWrappersRelease.Clear;
   end;
 end;
 
@@ -3060,10 +3098,10 @@ begin
   FreeAndNil(FProperties);
   FreeAndNil(FMethods);
 
-  TLuaCallbackWrapper.Release(FLuaIndexHandler);
-  TLuaCallbackWrapper.Release(FLuaCallHandler);
-  TLuaCallbackWrapper.Release(FLuaNewHandler);
-  TLuaCallbackWrapper.Release(FLuaGCHandler);
+  TLuaCallbackWrapper.PrepareRelease(FLuaIndexHandler);
+  TLuaCallbackWrapper.PrepareRelease(FLuaCallHandler);
+  TLuaCallbackWrapper.PrepareRelease(FLuaNewHandler);
+  TLuaCallbackWrapper.PrepareRelease(FLuaGCHandler);
 
   inherited;
 end;
@@ -3326,6 +3364,17 @@ begin
     // Pop the retrived value
     ALua.Stack.Pop;
   end;
+end;
+
+procedure TLuaClassBlueprint.CleanupInstances;
+var
+  I: Integer;
+begin
+  for I:=0 to FInheritances.Count - 1 do
+    FInheritances[I].Finalize;
+
+  for I:=0 to FInstances.Count - 1 do
+    FInstances[I].ReleaseCleanup;
 end;
 
 function TLuaClassBlueprint.Construct(AData: Pointer = nil): TLuaClass;
@@ -3644,8 +3693,9 @@ begin
   // Cleanup the remaining stuff...
   ReleaseCleanup;
 
-  // Free the callback wrapper...
-  TLuaCallbackWrapper.Release(FLuaReleaseHandler);
+  // Free the callback wrappers...
+  TLuaCallbackWrapper.PrepareRelease(FLuaReleaseHandler);
+  TLuaCallbackWrapper.PrepareRelease(FLuaInheritedHandler);
 
   try
     for I:=0 to FIndexProperties.Count - 1 do
@@ -4388,6 +4438,14 @@ destructor TLua.Destroy;
 begin
   FStatus:=lssDestroy;
 
+  // Execute pre-cleanup actions
+  PreCleanup;
+
+  // Free objects that depend on the state
+  FreeAndNil(FCleanupList);
+  FreeAndNil(FClassInheritor);
+  FreeAndNil(FClassBlueprints);
+
   // Free the state
   if NOT FVolatile then
   begin
@@ -4396,12 +4454,10 @@ begin
     finally
       FState:=nil;
     end;
-  end;
 
-  // Free objects that depend on the state
-  FreeAndNil(FCleanupList);
-  FreeAndNil(FClassInheritor);
-  FreeAndNil(FClassBlueprints);
+    // Cleanup the callback wrappers that where still requierd by the state...
+    TLuaCallbackWrapper.CleanupRelease;
+  end;
 
   // Free the other stuff
   FreeAndNil(FStack);
@@ -4611,6 +4667,14 @@ begin
       end;
     end;
   end;
+end;
+
+procedure TLua.PreCleanup;
+var
+  I: Integer;
+begin
+  for I:=0 to FClassBlueprints.Count - 1 do
+    FClassBlueprints[I].CleanupInstances;
 end;
 
 function TLua.PushAndUnref(ARefId: Integer): Integer;
