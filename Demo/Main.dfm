@@ -10,11 +10,9 @@ object frmMain: TfrmMain
   Font.Height = -11
   Font.Name = 'Tahoma'
   Font.Style = []
-  OldCreateOrder = False
   DesignSize = (
     1144
     704)
-  PixelsPerInch = 96
   TextHeight = 13
   object btnExecute: TButton
     Left = 8
@@ -55,6 +53,19 @@ object frmMain: TfrmMain
       'Out(table, "TESTVALUE: " .. tostring(TESTVALUE));'
       ''
       'Out("=============== Functions ===============");'
+      ''
+      'function MyLuaFunc(...);'
+      ''
+      '  Out("Called from Delphi: MyLuaFunc();");'
+      ''
+      '  local arg = {...};'
+      '  for i,v in ipairs(arg) do'
+      '    Out("Func: " .. tostring(v));'
+      '  end;'
+      ''
+      '  return true, "Hello world from lua func!";'
+      ''
+      'end;'
       ''
       'TestProc1("FooBar");'
       ''

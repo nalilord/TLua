@@ -575,11 +575,13 @@ type
     FErrorHandlers: TInterfaceList;
     FClassBlueprints: TObjectList<TLuaClassBlueprint>;
     FClassInheritor: TLuaClassInheritor;
+    FFunctions: THashedStringList;
     procedure SetScriptSource(const Value: TStrings);
     function GetGlobals(Name: String): Variant;
     procedure SetGlobals(Name: String; const Value: Variant);
     function GetTables(Name: String): TLuaTable;
     procedure SetTables(Name: String; const Value: TLuaTable);
+    function GetFunctions(Name: String): TLuaFunction;
   strict protected
     constructor Create(AState: TLuaState); overload;
   protected
@@ -597,6 +599,7 @@ type
     procedure RegisterProcedure(AName: String; AProc: TLuaProcedure);
     procedure RegisterFunction(AName: String; AFunc: TLuaFunctionEvent);
     procedure RegisterMethod(AName: String; AMethod: TLuaMethodEvent);
+    function IntroduceFunction(AName: String): Boolean;
     function PushRef(ARefId: Integer): Integer;
     function PushAndUnref(ARefId: Integer): Integer;
     function NewValue(AValue: Variant; AName: String = ''): TLuaValue;
@@ -607,10 +610,11 @@ type
     function LoadSource(AFileName: String): Boolean;
     function Execute: Boolean;
     function ExecuteDirect(ASource: String): Boolean;
-    property State: TLuaState                read FState;
-    property IsVolatile: Boolean             read FVolatile;
-    property Globals[Name: String]: Variant  read GetGlobals write SetGlobals;
-    property Tables[Name: String]: TLuaTable read GetTables  write SetTables;
+    property State: TLuaState                       read FState;
+    property IsVolatile: Boolean                    read FVolatile;
+    property Functions[Name: String]: TLuaFunction  read GetFunctions;
+    property Globals[Name: String]: Variant         read GetGlobals   write SetGlobals;
+    property Tables[Name: String]: TLuaTable        read GetTables    write SetTables;
   published
     property MemoryUsage: NativeInt read FMemoryUsage;
     property Stack: TLuaStack       read FStack;
@@ -2995,7 +2999,7 @@ begin
   FResults.FCount:=Abs(FLua.Stack.Top - I);
 
   // Manual fetch results
-  for I:=0 to FResults.FCount - 1 do
+  for I:=FResults.FCount - 1 downto 0 do
   begin
     FResults.FValues.Add(TLuaValue.New(FLua, -(I + 1)));
   end;
@@ -4396,6 +4400,7 @@ begin
   FClassInheritor:=TLuaClassInheritor.Create(Self);
   FClassBlueprints:=TObjectList<TLuaClassBlueprint>.Create;
   FErrorHandlers:=TInterfaceList.Create;
+  FFunctions:=THashedStringList.Create(dupError, True, False);
 
   // Create lua state and open default libs
   FState:=lua_newstate(LuaDefaultAllocator, Self);
@@ -4426,6 +4431,7 @@ begin
   FClassInheritor:=TLuaClassInheritor.Create(Self);
   FClassBlueprints:=TObjectList<TLuaClassBlueprint>.Create;
   FErrorHandlers:=TInterfaceList.Create;
+  FFunctions:=THashedStringList.Create;
 
   // Save state
   FState:=AState;
@@ -4450,6 +4456,7 @@ begin
   FreeAndNil(FCleanupList);
   FreeAndNil(FClassInheritor);
   FreeAndNil(FClassBlueprints);
+  FreeAndNil(FFunctions);
 
   // Free the state
   if NOT FVolatile then
@@ -4554,6 +4561,17 @@ begin
   finally
     luaL_unref(FState, LUA_REGISTRYINDEX, RefId);
   end;
+end;
+
+function TLua.GetFunctions(Name: String): TLuaFunction;
+var
+  Idx: Integer;
+begin
+  Result:=nil;
+
+  Idx:=FFunctions.IndexOf(Name);
+  if Idx >= 0 then
+    Result:=TLuaFunction(FFunctions.Objects[Idx]);
 end;
 
 function TLua.GetGlobals(Name: String): Variant;
@@ -4678,6 +4696,9 @@ procedure TLua.PreCleanup;
 var
   I: Integer;
 begin
+  for I:=0 to FFunctions.Count - 1 do
+    FFunctions.Objects[I].Free;
+
   for I:=0 to FClassBlueprints.Count - 1 do
     FClassBlueprints[I].CleanupInstances;
 end;
@@ -4788,6 +4809,19 @@ begin
     begin
       ILuaErrorHandler(FErrorHandlers[I]).OnScriptExecutionError(AException.Name, AException.Message, AException.Code, AException.LuaMessage);
     end;
+  end;
+end;
+
+function TLua.IntroduceFunction(AName: String): Boolean;
+var
+  LuaFunction: TLuaFunction;
+begin
+  Result:=False;
+
+  FStack.GetGlobal(AName);
+  if FStack.IsFunction(-1) then
+  begin
+    Result:=FFunctions.AddObject(AName, TLuaFunction.New(Self, -1)) >= 0;
   end;
 end;
 

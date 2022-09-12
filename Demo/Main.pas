@@ -33,6 +33,9 @@ var
 
 implementation
 
+uses
+  LuaAPI;
+
 {$R *.dfm}
 
 { Global }
@@ -83,6 +86,7 @@ var
   Lib: TLuaLibrary;
   TableA, TableB: TLuaTable;
   ValA, ValB: TLuaValue;
+  LuaFunc: TLuaCFunctionEvent;
 begin
   Lua:=TLua.Create;
 
@@ -151,6 +155,22 @@ begin
   // ******************
   // * Misc Tests
   // ******************
+
+  Lua.IntroduceFunction('MyLuaFunc');
+  with Lua.Functions['MyLuaFunc'] do
+  begin
+    Args.Clear;
+    Args.PushInt(1337);
+    Args.PushStr('Foo');
+    Args.PushStr('Bar');
+
+    Execute;
+
+    if Results.Check([ltBoolean, ltString], True) then
+    begin
+      WriteLn('MyLuaFunc Result: ', BoolToStr(Results[0].AsBool, True), '/', Results[1].AsStr);
+    end;
+  end;
 
   ValA:=Lua.NewValue(1337);
   ValB:=Lua.NewValue($B00B, 'gnihihi');
