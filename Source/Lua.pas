@@ -8,6 +8,7 @@
 {         + Added "Classes" property to TLua                                }
 {         + Added "SetGlobal" to TLuaObject                                 }
 {         + Added "FromGlobal" to TLuaObject for internal use               }
+{         - Fixed missing stack pops                                        }
 {       2022-09-12 - 1.3                                                    }
 {         + Added "IntroduceFunction" to TLua                               }
 {         + Added "Functions" property to TLua                              }
@@ -755,6 +756,7 @@ type
     procedure PushBool(AValue: Boolean);
     procedure PushStr(AValue: String);
     procedure PushValue(AValue: TLuaValue);
+    procedure PushClass(AValue: TLuaClass);
     procedure PushByRefId(ARefId: Integer);
     procedure PushByStack(AIndex: Integer);
     property Count: Integer read GetCount;
@@ -3029,6 +3031,9 @@ begin
   begin
     FResults.FValues.Add(TLuaValue.New(FLua, -(I + 1)));
   end;
+
+  // Remove the results from the stack
+  FLua.Stack.Pop(FResults.FCount);
 end;
 
 procedure TLuaFunction.Initialize;
@@ -4205,7 +4210,6 @@ begin
       FLua.Stack.Pop;
     end;
   end;
-
 end;
 
 destructor TLuaClassMethodInvoker.Destroy;
@@ -4866,15 +4870,19 @@ begin
 end;
 
 function TLua.IntroduceFunction(AName: String): Boolean;
-var
-  LuaFunction: TLuaFunction;
 begin
   Result:=False;
 
   FStack.GetGlobal(AName);
-  if FStack.IsFunction(-1) then
-  begin
-    Result:=FFunctions.AddObject(AName, TLuaFunction.New(Self, -1)) >= 0;
+  try
+    if FStack.IsFunction(-1) AND (FFunctions.IndexOf(AName) <= 0) then
+    begin
+      FFunctions.AddObject(AName, TLuaFunction.New(Self, -1));
+
+      Result:=True;
+    end;
+  finally
+    FStack.Pop;
   end;
 end;
 
@@ -5454,6 +5462,11 @@ end;
 procedure TLuaResults.PushByStack(AIndex: Integer);
 begin
   FValues.Add(TLuaValue.New(FLua, AIndex));
+end;
+
+procedure TLuaResults.PushClass(AValue: TLuaClass);
+begin
+  FValues.Add(TLuaValue.FromRefId(FLua, AValue.RefId));
 end;
 
 procedure TLuaResults.PushFloat(AValue: Double);
