@@ -4875,7 +4875,7 @@ begin
 
   FStack.GetGlobal(AName);
   try
-    if FStack.IsFunction(-1) AND (FFunctions.IndexOf(AName) <= 0) then
+    if FStack.IsFunction(-1) AND (FFunctions.IndexOf(AName) < 0) then
     begin
       FFunctions.AddObject(AName, TLuaFunction.New(Self, -1));
 
