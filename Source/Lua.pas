@@ -2,8 +2,16 @@
 {                                                                           }
 {       TLua - Lua Framework for Delphi                                     }
 {                                                                           }
-{       Version 1.2                                                         }
+{       Version 1.4                                                         }
 {                                                                           }
+{       2022-09-13 - 1.4                                                    }
+{         + Added "Classes" property to TLua                                }
+{         + Added "SetGlobal" to TLuaObject                                 }
+{         + Added "FromGlobal" to TLuaObject for internal use               }
+{       2022-09-12 - 1.3                                                    }
+{         + Added "IntroduceFunction" to TLua                               }
+{         + Added "Functions" property to TLua                              }
+{         - Fixed wrong order of results in TLuaFunction                    }
 {       2021-10-27 - 1.2                                                    }
 {         - Fixed rnd AV on free of TLua when using Classes and Blueprints  }
 {         - Fixed mem leak caused by Callback handlers not beeing freed     }
@@ -19,7 +27,7 @@
 {       2012/13-??-?? - 0.1                                                 }
 {         ! Initial Release                                                 }
 {                                                                           }
-{       (c) 2021 by Daniel M. (NaliLord)                                    }
+{       (c) 2022 by Daniel M. (NaliLord)                                    }
 {                                                                           }
 {***************************************************************************}
 
@@ -111,6 +119,7 @@ type
     function GetTyp: TLuaType;
   strict protected
     constructor Create(ALua: TLua; AType: TLuaObjectAcquisition = oaDefault; AValue: Integer = 0);
+    class function FromGlobal(ALua: TLua; AName: String): TLuaObject; virtual;
   protected
     procedure Initialize; virtual;
     procedure UnRef; virtual;
@@ -119,6 +128,7 @@ type
   public
     destructor Destroy; override;
     procedure Assign(Source: TPersistent); override;
+    procedure SetGlobal(AName: String);
     function CheckState(ALua: TLua): Boolean;
     function CopyToRef: Integer;
     function PushToStack: Integer;
@@ -412,6 +422,7 @@ type
     function GetMethods(Index: Integer): String;
     function GetProperties(Index: Integer): String;
   protected
+    class function FromGlobal(ALua: TLua; AName: String): TLuaObject; override; // We need to override this here, otherwise Initialize would be called...
     class function Acquire(AState: TLuaState; AKeepOnStack: Boolean = False): TLuaClassBlueprint;
     class function FromTable(ATable: TLuaTable): TLuaClassBlueprint;
     constructor Create(ALua: TLua; AName: String); overload;
@@ -483,6 +494,7 @@ type
     procedure LuaReleaseHandler(Sender: TLua; Clazz: TLuaClass);
     procedure LuaInheritedHandler(Sender: TLua; Clazz: TLuaClass; Args: TLuaArgs; Results: TLuaResults);
   protected
+    class function FromGlobal(ALua: TLua; AName: String): TLuaObject; override; // We need to override this here, otherwise Initialize would be called...
     class function Acquire(AState: TLuaState; AKeepOnStack: Boolean = False): TLuaClass;
     class function New(ALua: TLua; ABlueprint: TLuaClassBlueprint; AData: Pointer = nil): TLuaClass;
     procedure ReleaseCleanup;
@@ -582,6 +594,7 @@ type
     function GetTables(Name: String): TLuaTable;
     procedure SetTables(Name: String; const Value: TLuaTable);
     function GetFunctions(Name: String): TLuaFunction;
+    function GetClasses(AName: String): TLuaClassBlueprint;
   strict protected
     constructor Create(AState: TLuaState); overload;
   protected
@@ -610,11 +623,12 @@ type
     function LoadSource(AFileName: String): Boolean;
     function Execute: Boolean;
     function ExecuteDirect(ASource: String): Boolean;
-    property State: TLuaState                       read FState;
-    property IsVolatile: Boolean                    read FVolatile;
-    property Functions[Name: String]: TLuaFunction  read GetFunctions;
-    property Globals[Name: String]: Variant         read GetGlobals   write SetGlobals;
-    property Tables[Name: String]: TLuaTable        read GetTables    write SetTables;
+    property State: TLuaState                           read FState;
+    property IsVolatile: Boolean                        read FVolatile;
+    property Functions[Name: String]: TLuaFunction      read GetFunctions;
+    property Classes[Name: String]: TLuaClassBlueprint  read GetClasses;
+    property Globals[Name: String]: Variant             read GetGlobals   write SetGlobals;
+    property Tables[Name: String]: TLuaTable            read GetTables    write SetTables;
   published
     property MemoryUsage: NativeInt read FMemoryUsage;
     property Stack: TLuaStack       read FStack;
@@ -1670,6 +1684,12 @@ begin
   inherited;
 end;
 
+class function TLuaObject.FromGlobal(ALua: TLua; AName: String): TLuaObject;
+begin
+  ALua.Stack.GetGlobal(AName);
+  Result:=Create(ALua);
+end;
+
 function TLuaObject.CheckState(ALua: TLua): Boolean;
 begin
   Result:=FLua.State = ALua.State;
@@ -1761,6 +1781,12 @@ begin
 
   // Return stack position
   Result:=FLua.Stack.Top;
+end;
+
+procedure TLuaObject.SetGlobal(AName: String);
+begin
+  PushToStack;
+  FLua.Stack.SetGlobal(AName);
 end;
 
 { TLuaValue }
@@ -3158,6 +3184,12 @@ begin
   FInstances.Clear;
 end;
 
+class function TLuaClassBlueprint.FromGlobal(ALua: TLua; AName: String): TLuaObject;
+begin
+  ALua.Stack.GetGlobal(AName);
+  Result:=Acquire(ALua.State);
+end;
+
 class function TLuaClassBlueprint.FromTable(ATable: TLuaTable): TLuaClassBlueprint;
 begin
   ATable.PushToStack;
@@ -3736,6 +3768,12 @@ begin
   FreeAndNil(FCleanupList);
 
   inherited;
+end;
+
+class function TLuaClass.FromGlobal(ALua: TLua; AName: String): TLuaObject;
+begin
+  ALua.Stack.GetGlobal(AName);
+  Result:=Acquire(ALua.State);
 end;
 
 class function TLuaClass.Acquire(AState: TLuaState; AKeepOnStack: Boolean = False): TLuaClass;
@@ -4493,6 +4531,21 @@ begin
   if Result.State <> AState then
   begin
     Result:=TLua.Volatile(AState);
+  end;
+end;
+
+function TLua.GetClasses(AName: String): TLuaClassBlueprint;
+var
+  I: Integer;
+begin
+  Result:=nil;
+
+  for I:=0 to FClassBlueprints.Count - 1 do
+  begin
+    if AnsiSameText(FClassBlueprints[I].FName, AName) then
+    begin
+      Exit(FClassBlueprints[I]);
+    end;
   end;
 end;
 
