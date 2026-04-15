@@ -1,0 +1,38 @@
+name: Delphi CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    name: ${{ matrix.platform }}
+    runs-on:
+      - self-hosted
+      - windows
+      - delphi
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - Win32
+          - Win64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run Regression Suite
+        shell: pwsh
+        run: .\ci\windows-test.ps1 -Project 'Tests\TLuaTests.dpr' -Platform '${{ matrix.platform }}'
+
+      - name: Build Demo
+        shell: pwsh
+        run: .\ci\windows-build.ps1 -Project 'Demo\TestApp.dpr' -Platform '${{ matrix.platform }}'
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: tlua-${{ matrix.platform }}
+          path: Bin/${{ matrix.platform }}

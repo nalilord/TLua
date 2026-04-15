@@ -125,7 +125,7 @@ begin
   Clazz.AddProperty('blubb', MyClass_blubb_get, MyClass_blubb_set);
   Clazz.AddIndexProperty('idx', MyClass_idx_get, MyClass_idx_set);
 
-  Clazz.OnConstructon:=MyClass_construct;
+  Clazz.OnConstruction:=MyClass_construct;
   Clazz.OnRelease:=MyClass_release;
   Clazz.OnGarbageCollection:=MyClass_gc;
   Clazz.OnDefaultPropertyGet:=MyClass_get;
@@ -157,6 +157,9 @@ begin
   // ******************
 
   Lua.IntroduceFunction('MyLuaFunc');
+  Lua.IntroduceFunction('MyLuaFunc');
+  Lua.IntroduceFunction('MyLuaFunc');
+  Lua.IntroduceFunction('MyLuaFunc');
   with Lua.Functions['MyLuaFunc'] do
   begin
     Args.Clear;
@@ -171,6 +174,8 @@ begin
       WriteLn('MyLuaFunc Result: ', BoolToStr(Results[0].AsBool, True), '/', Results[1].AsStr);
     end;
   end;
+
+  Lua.Stack.DumpToDebugOut;
 
   ValA:=Lua.NewValue(1337);
   ValB:=Lua.NewValue($B00B, 'gnihihi');

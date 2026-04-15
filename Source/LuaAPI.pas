@@ -1,6 +1,6 @@
 (******************************************************************************
  *                                                                            *
- *  File:        lua54.pas                                                    *
+ *  File:        LuaAPI.pas                                                   *
  *                                                                            *
  *  Authors:     TeCGraf           (C headers + actual Lua libraries)         *
  *               Lavergne Thomas   (original translation to Pascal)           *
@@ -8,6 +8,7 @@
  *               Egor Skriptunoff  (update to Lua 5.2.1 for FreePascal)       *
  *               Vladimir Klimov   (Delphi compatibility)                     *
  *               Malcome@Japan     (update to Lua 5.4.0 for FreePascal)       *
+ *               TLua project      (update to Lua 5.5.0 for Delphi)           *
  *                                                                            *
  *  Description: Basic Lua library                                            *
  *               Lua auxiliary library                                        *
@@ -69,6 +70,7 @@
 *)
 (*
 ** Updated to Lua 5.4.0 by Malcome@Japan
+** Updated to Lua 5.5.0 by the TLua project
 ** Notes:
 **    - Only tested with FPC (FreePascal Compiler)
 **    - Needs Delphi with Int64 supported.
@@ -97,34 +99,43 @@
 
 unit LuaAPI;
 
+{$IFDEF LUA_STATIC}
+  {$IFNDEF MSWINDOWS}
+    {$MESSAGE FATAL 'LUA_STATIC is currently only supported on Win64 Windows.'}
+  {$ENDIF}
+  {$IFNDEF CPUX64}
+    {$MESSAGE FATAL 'LUA_STATIC is currently only supported on Win64 Windows.'}
+  {$ENDIF}
+{$ENDIF}
+
 interface
 
 const
 {$IFDEF MSWINDOWS}
   {$IFNDEF CPUX64}
-   LUA_LIB_NAME = 'lua54.dll';
+   LUA_LIB_NAME = 'lua55.dll';
   {$ELSE}
-   LUA_LIB_NAME = 'lua54_64.dll';
+   LUA_LIB_NAME = 'lua55_64.dll';
   {$ENDIF}
 {$ELSE}
-   LUA_LIB_NAME = 'liblua54.so';
+   LUA_LIB_NAME = 'liblua55.so';
 {$ENDIF}
 
 const
    LUA_VERSION_MAJOR   = '5';
-   LUA_VERSION_MINOR   = '4';
-   LUA_VERSION_RELEASE = '3';
-   LUA_VERSION_NUM     = 504;
-   LUA_VERSION_RELEASE_NUM = LUA_VERSION_NUM * 100 + 3;
+   LUA_VERSION_MINOR   = '5';
+   LUA_VERSION_RELEASE = '0';
+   LUA_VERSION_NUM     = 505;
+   LUA_VERSION_RELEASE_NUM = LUA_VERSION_NUM * 100 + 0;
    LUA_VERSION_        = 'Lua ' + LUA_VERSION_MAJOR + '.' + LUA_VERSION_MINOR; // LUA_VERSION was suffixed by '_' for avoiding name collision
    LUA_RELEASE         = LUA_VERSION_ + '.' + LUA_VERSION_RELEASE;
-   LUA_COPYRIGHT       = LUA_RELEASE + '  Copyright (C) 1994-2015 Lua.org, PUC-Rio';
+   LUA_COPYRIGHT       = LUA_RELEASE + '  Copyright (C) 1994-2025 Lua.org, PUC-Rio';
    LUA_AUTHORS         = 'R. Ierusalimschy, L. H. de Figueiredo, W. Celes';
    LUA_SIGNATURE       = #27'Lua';  // mark for precompiled code '<esc>Lua'
    LUA_MULTRET         = -1;        // option for multiple returns in 'lua_pcall' and 'lua_call'
 
    // pseudo-indices
-   LUA_REGISTRYINDEX   = -1001000;
+   LUA_REGISTRYINDEX   = -1073742823; // -(INT_MAX div 2 + 1000) in Lua 5.5
 
 function lua_upvalueindex(I: Integer): Integer; inline;
 
@@ -209,15 +220,17 @@ const
    LUA_MINSTACK = 20;
 
    // predefined values in the registry */
-   LUA_RIDX_MAINTHREAD = 1;
+   // index 1 is reserved for the reference mechanism in Lua 5.5
    LUA_RIDX_GLOBALS    = 2;
-   LUA_RIDX_LAST       = LUA_RIDX_GLOBALS;
+   LUA_RIDX_MAINTHREAD = 3;
+   LUA_RIDX_LAST       = LUA_RIDX_MAINTHREAD;
 
 // state manipulation
 function lua_newstate(f: lua_Alloc; ud: Pointer): Plua_state; cdecl;
 procedure lua_close(L: Plua_State); cdecl;
 function lua_newthread(L: Plua_State): Plua_State; cdecl;
 function lua_resetthread(L: Plua_State): Integer; cdecl;
+function lua_closethread(L, from: Plua_State): Integer; cdecl;
 function lua_atpanic(L: Plua_State; panicf: lua_CFunction): lua_CFunction; cdecl;
 function lua_version(L: Plua_State): lua_Number; cdecl;
 
@@ -501,6 +514,7 @@ function luaL_loadstring(L: Plua_State; const s: PAnsiChar): Integer; cdecl;
 function luaL_newstate: Plua_State; cdecl;
 function luaL_len(L: Plua_State; idx: Integer): lua_Integer; cdecl;
 function luaL_gsub(L: Plua_State; const s, p, r: PAnsiChar): PAnsiChar; cdecl;
+function luaL_makeseed(L: Plua_State): Cardinal; cdecl;
 procedure luaL_setfuncs(L: Plua_State; lr: array of luaL_Reg; nup: Integer); overload;
 procedure luaL_setfuncs(L: Plua_State; lr: PluaL_Reg; nup: Integer); cdecl; overload;
 function luaL_getsubtable(L: Plua_State; idx: Integer; const fname: PAnsiChar): Integer; cdecl;
@@ -546,6 +560,7 @@ function luaopen_utf8(L: Plua_State): Integer; cdecl;
 function luaopen_math(L: Plua_State): Integer; cdecl;
 function luaopen_debug(L: Plua_State): Integer; cdecl;
 function luaopen_package(L: Plua_State): Integer; cdecl;
+procedure luaL_openselectedlibs(L: Plua_State; load, preload: Integer); cdecl;
 
 // open all previous libraries
 procedure luaL_openlibs(L: Plua_State); cdecl;
@@ -560,24 +575,205 @@ procedure luaL_pushvariant(L: Plua_State; v: Variant);
 implementation
 
 uses
-  System.StrUtils, System.Variants, System.AnsiStrings, System.SysUtils;
+  System.StrUtils, System.Variants, System.AnsiStrings, System.SysUtils
+  {$IFDEF LUA_STATIC}, Winapi.Windows, LuaStaticWin64CrtImports{$ENDIF};
+
+{$IFDEF LUA_STATIC}
+{$LINK 'Obj\Win64\minilua.obj'}
+
+function malloc(size: NativeUInt): Pointer; cdecl;
+begin
+  GetMem(Result, size);
+end;
+
+procedure free(P: Pointer); cdecl;
+begin
+  FreeMem(P);
+end;
+
+function realloc(P: Pointer; Size: NativeUInt): Pointer; cdecl;
+begin
+  Result := P;
+  ReallocMem(Result, Size);
+end;
+
+function rename(oldname, newname: PAnsiChar): Integer; cdecl;
+begin
+  if MoveFileA(oldname, newname) then
+    Result := 0
+  else
+    Result := -1;
+end;
+
+function memset(P: Pointer; B: Integer; Count: NativeUInt): Pointer; cdecl;
+var
+  Dest: PByte;
+begin
+  Dest := P;
+  while Count <> 0 do
+  begin
+    Dest^ := Byte(B);
+    Inc(Dest);
+    Dec(Count);
+  end;
+  Result := P;
+end;
+
+function memmove(dest, source: Pointer; Count: NativeUInt): Pointer; cdecl;
+var
+  DestBytes: PByte;
+  SourceBytes: PByte;
+begin
+  DestBytes := dest;
+  SourceBytes := source;
+  if (DestBytes > SourceBytes) and (NativeUInt(DestBytes - SourceBytes) < Count) then
+  begin
+    Inc(DestBytes, Count);
+    Inc(SourceBytes, Count);
+    while Count <> 0 do
+    begin
+      Dec(DestBytes);
+      Dec(SourceBytes);
+      DestBytes^ := SourceBytes^;
+      Dec(Count);
+    end;
+  end
+  else
+  begin
+    while Count <> 0 do
+    begin
+      DestBytes^ := SourceBytes^;
+      Inc(DestBytes);
+      Inc(SourceBytes);
+      Dec(Count);
+    end;
+  end;
+  Result := dest;
+end;
+
+function memcpy(dest, source: Pointer; Count: NativeUInt): Pointer; cdecl;
+var
+  DestBytes: PByte;
+  SourceBytes: PByte;
+begin
+  DestBytes := dest;
+  SourceBytes := source;
+  while Count <> 0 do
+  begin
+    DestBytes^ := SourceBytes^;
+    Inc(DestBytes);
+    Inc(SourceBytes);
+    Dec(Count);
+  end;
+  Result := dest;
+end;
+
+function strlen(p: PAnsiChar): NativeUInt; cdecl;
+begin
+  Result := 0;
+  if p = nil then
+    Exit;
+  while p^ <> #0 do
+  begin
+    Inc(Result);
+    Inc(p);
+  end;
+end;
+
+function strspn(str, accept: PAnsiChar): NativeUInt; cdecl;
+var
+  Current: PAnsiChar;
+begin
+  Result := 0;
+  if (str = nil) or (accept = nil) then
+    Exit;
+
+  while str^ <> #0 do
+  begin
+    Current := accept;
+    while (Current^ <> #0) and (Current^ <> str^) do
+      Inc(Current);
+    if Current^ = #0 then
+      Exit;
+    Inc(Result);
+    Inc(str);
+  end;
+end;
+
+function strrchr(s: PAnsiChar; c: AnsiChar): PAnsiChar; cdecl;
+begin
+  Result := nil;
+  if s <> nil then
+    while s^ <> #0 do
+    begin
+      if s^ = c then
+        Result := s;
+      Inc(s);
+    end;
+end;
+
+function memcmp(p1, p2: PByte; Size: Integer): Integer; cdecl;
+begin
+  if (p1 <> p2) and (Size <> 0) then
+    if p1 <> nil then
+      if p2 <> nil then
+      begin
+        repeat
+          if p1^ = p2^ then
+          begin
+            Inc(p1);
+            Inc(p2);
+            Dec(Size);
+            if Size <> 0 then
+              continue
+            else
+              Break;
+          end;
+          Result := p1^ - p2^;
+          Exit;
+        until False;
+        Result := 0;
+      end
+      else
+        Result := 1
+    else
+      Result := -1
+  else
+    Result := 0;
+end;
+
+function strncmp(p1, p2: PByte; Size: Integer): Integer; cdecl;
+var
+  I: Integer;
+begin
+  for I := 1 to Size do
+  begin
+    Result := p1^ - p2^;
+    if (Result <> 0) or (p1^ = 0) then
+      Exit;
+    Inc(p1);
+    Inc(p2);
+  end;
+  Result := 0;
+end;
+{$ENDIF}
 
 function lua_upvalueindex(I: Integer): Integer;
 begin
    Result := LUA_REGISTRYINDEX - i;
 end;
 
-function lua_newstate(f: lua_Alloc; ud: Pointer): Plua_State; cdecl; external LUA_LIB_NAME;
-procedure lua_close(L: Plua_State); cdecl; external LUA_LIB_NAME;
-function lua_newthread(L: Plua_State): Plua_State; cdecl; external LUA_LIB_NAME;
-function lua_resetthread(L: Plua_State): Integer; cdecl; external LUA_LIB_NAME;
-function lua_atpanic(L: Plua_State; panicf: lua_CFunction): lua_CFunction; cdecl; external LUA_LIB_NAME;
-function lua_version(L: Plua_State): lua_Number; cdecl; external LUA_LIB_NAME;
-function lua_absindex(L: Plua_State; idx: Integer): Integer; cdecl; external LUA_LIB_NAME;
-function lua_gettop(L: Plua_State): Integer; cdecl; external LUA_LIB_NAME;
-procedure lua_settop(L: Plua_State; idx: Integer); cdecl; external LUA_LIB_NAME;
-procedure lua_pushvalue(L: Plua_State; Idx: Integer); cdecl; external LUA_LIB_NAME;
-procedure lua_rotate(L: Plua_State; idx, n: Integer); cdecl; external LUA_LIB_NAME;
+function _lua_newstate(f: lua_Alloc; ud: Pointer; seed: Cardinal): Plua_State; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF} name 'lua_newstate';
+procedure lua_close(L: Plua_State); cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function lua_newthread(L: Plua_State): Plua_State; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function lua_closethread(L, from: Plua_State): Integer; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function lua_atpanic(L: Plua_State; panicf: lua_CFunction): lua_CFunction; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function lua_version(L: Plua_State): lua_Number; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function lua_absindex(L: Plua_State; idx: Integer): Integer; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function lua_gettop(L: Plua_State): Integer; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+procedure lua_settop(L: Plua_State; idx: Integer); cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+procedure lua_pushvalue(L: Plua_State; Idx: Integer); cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+procedure lua_rotate(L: Plua_State; idx, n: Integer); cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
 
 procedure lua_remove(L: Plua_State; idx: Integer);
 begin
@@ -596,70 +792,70 @@ begin
    lua_pop(L, 1);
 end;
 
-procedure lua_copy(L: Plua_State; fromidx, toidx: Integer); cdecl; external LUA_LIB_NAME;
-function lua_checkstack(L: Plua_State; n: Integer): LongBool; cdecl; external LUA_LIB_NAME;
-procedure lua_xmove(from, to_: Plua_State; n: Integer); cdecl; external LUA_LIB_NAME;
-function lua_isnumber(L: Plua_State; idx: Integer): LongBool; cdecl; external LUA_LIB_NAME;
-function lua_isstring(L: Plua_State; idx: Integer): LongBool; cdecl; external LUA_LIB_NAME;
-function lua_iscfunction(L: Plua_State; idx: Integer): LongBool; cdecl; external LUA_LIB_NAME;
-function lua_isinteger(L: Plua_State; idx: Integer): LongBool; cdecl; external LUA_LIB_NAME;
-function lua_isuserdata(L: Plua_State; idx: Integer): LongBool; cdecl; external LUA_LIB_NAME;
-function lua_type(L: Plua_State; idx: Integer): Integer; cdecl; external LUA_LIB_NAME;
-function lua_typename(L: Plua_State; tp: Integer): PAnsiChar; cdecl; external LUA_LIB_NAME;
-function lua_tonumberx(L: Plua_State; idx: Integer; isnum: PLongBool): lua_Number; cdecl; external LUA_LIB_NAME;
-function lua_tointegerx(L: Plua_State; idx: Integer; isnum: PLongBool): lua_Integer; cdecl; external LUA_LIB_NAME;
-procedure lua_arith(L: Plua_State; op: Integer); cdecl; external LUA_LIB_NAME;
-function lua_rawequal(L: Plua_State; idx1, idx2: Integer): LongBool; cdecl; external LUA_LIB_NAME;
-function lua_compare(L: Plua_State; idx1, idx2, op: Integer): LongBool; cdecl; external LUA_LIB_NAME;
-function lua_toboolean(L: Plua_State; idx: Integer): LongBool; cdecl; external LUA_LIB_NAME;
-function lua_tolstring(L: Plua_State; idx: Integer; len: Psize_t): PAnsiChar; cdecl; external LUA_LIB_NAME;
-function lua_rawlen(L: Plua_State; idx: Integer): lua_Unsigned; cdecl; external LUA_LIB_NAME;
-function lua_tocfunction(L: Plua_State; idx: Integer): lua_CFunction; cdecl; external LUA_LIB_NAME;
-function lua_touserdata(L: Plua_State; idx: Integer): Pointer; cdecl; external LUA_LIB_NAME;
-function lua_tothread(L: Plua_State; idx: Integer): Plua_State; cdecl; external LUA_LIB_NAME;
-function lua_topointer(L: Plua_State; idx: Integer): Pointer; cdecl; external LUA_LIB_NAME;
-procedure lua_pushnil(L: Plua_State); cdecl; external LUA_LIB_NAME;
-procedure lua_pushnumber(L: Plua_State; n: lua_Number); cdecl; external LUA_LIB_NAME;
-procedure lua_pushinteger(L: Plua_State; n: lua_Integer); cdecl; external LUA_LIB_NAME;
-procedure lua_pushlstring(L: Plua_State; const s: PAnsiChar; len: size_t); cdecl; external LUA_LIB_NAME;
-procedure lua_pushstring(L: Plua_State; const s: PAnsiChar); cdecl; external LUA_LIB_NAME;
+procedure lua_copy(L: Plua_State; fromidx, toidx: Integer); cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function lua_checkstack(L: Plua_State; n: Integer): LongBool; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+procedure lua_xmove(from, to_: Plua_State; n: Integer); cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function lua_isnumber(L: Plua_State; idx: Integer): LongBool; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function lua_isstring(L: Plua_State; idx: Integer): LongBool; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function lua_iscfunction(L: Plua_State; idx: Integer): LongBool; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function lua_isinteger(L: Plua_State; idx: Integer): LongBool; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function lua_isuserdata(L: Plua_State; idx: Integer): LongBool; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function lua_type(L: Plua_State; idx: Integer): Integer; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function lua_typename(L: Plua_State; tp: Integer): PAnsiChar; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function lua_tonumberx(L: Plua_State; idx: Integer; isnum: PLongBool): lua_Number; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function lua_tointegerx(L: Plua_State; idx: Integer; isnum: PLongBool): lua_Integer; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+procedure lua_arith(L: Plua_State; op: Integer); cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function lua_rawequal(L: Plua_State; idx1, idx2: Integer): LongBool; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function lua_compare(L: Plua_State; idx1, idx2, op: Integer): LongBool; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function lua_toboolean(L: Plua_State; idx: Integer): LongBool; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function lua_tolstring(L: Plua_State; idx: Integer; len: Psize_t): PAnsiChar; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function lua_rawlen(L: Plua_State; idx: Integer): lua_Unsigned; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function lua_tocfunction(L: Plua_State; idx: Integer): lua_CFunction; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function lua_touserdata(L: Plua_State; idx: Integer): Pointer; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function lua_tothread(L: Plua_State; idx: Integer): Plua_State; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function lua_topointer(L: Plua_State; idx: Integer): Pointer; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+procedure lua_pushnil(L: Plua_State); cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+procedure lua_pushnumber(L: Plua_State; n: lua_Number); cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+procedure lua_pushinteger(L: Plua_State; n: lua_Integer); cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+procedure lua_pushlstring(L: Plua_State; const s: PAnsiChar; len: size_t); cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+procedure lua_pushstring(L: Plua_State; const s: PAnsiChar); cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
 
 procedure lua_pushstring(L: Plua_State; const s: AnsiString);
 begin
    lua_pushlstring(L, PAnsiChar(s), Length(s));
 end;
 
-function lua_pushvfstring(L: Plua_State; const fmt: PAnsiChar; argp: Pointer): PAnsiChar; cdecl; external LUA_LIB_NAME;
-function lua_pushfstring(L: Plua_State; const fmt: PAnsiChar): PAnsiChar; cdecl; varargs; external LUA_LIB_NAME;
-procedure lua_pushcclosure(L: Plua_State; fn: lua_CFunction; n: Integer); cdecl; external LUA_LIB_NAME;
-procedure lua_pushboolean(L: Plua_State; b: LongBool); cdecl; external LUA_LIB_NAME;
-procedure lua_pushlightuserdata(L: Plua_State; p: Pointer); cdecl; external LUA_LIB_NAME;
-procedure lua_pushthread(L: Plua_State); cdecl; external LUA_LIB_NAME;
-function lua_getglobal(L: Plua_State; const name: PAnsiChar): Integer; cdecl; external LUA_LIB_NAME;
-function lua_gettable(L: Plua_State; idx: Integer): Integer; cdecl; external LUA_LIB_NAME;
-function lua_getfield(L: Plua_state; idx: Integer; k: PAnsiChar): Integer; cdecl; external LUA_LIB_NAME;
-function lua_geti(L: Plua_State; idx: Integer; n: lua_Integer): Integer cdecl; external LUA_LIB_NAME;
-function lua_rawget(L: Plua_State; idx: Integer): Integer; cdecl; external LUA_LIB_NAME;
-function lua_rawgeti(L: Plua_State; idx: Integer; n: lua_Integer): Integer; cdecl; external LUA_LIB_NAME;
-function lua_rawgetp(L: Plua_State; idx: Integer; p: Pointer): Integer; cdecl; external LUA_LIB_NAME;
-procedure lua_createtable(L: Plua_State; narr, nrec: Integer); cdecl; external LUA_LIB_NAME;
-function lua_newuserdatauv(L: Plua_State; sz: size_t; nuvalue: Integer): Pointer; cdecl; external LUA_LIB_NAME;
-function lua_getmetatable(L: Plua_State; objindex: Integer): Integer; cdecl; external LUA_LIB_NAME;
-function lua_getiuservalue(L: Plua_State; idx, n: Integer): Integer; cdecl; external LUA_LIB_NAME;
-procedure lua_setglobal(L: Plua_State; const name: PAnsiChar); cdecl; external LUA_LIB_NAME;
-procedure lua_settable(L: Plua_State; idx: Integer); cdecl; external LUA_LIB_NAME;
-procedure lua_setfield(L: Plua_State; idx: Integer; k: PAnsiChar); cdecl; external LUA_LIB_NAME;
-procedure lua_seti(L: Plua_State; idx: Integer; n: lua_Integer); cdecl; external LUA_LIB_NAME;
-procedure lua_rawset(L: Plua_State; idx: Integer); cdecl; external LUA_LIB_NAME;
-procedure lua_rawseti(L: Plua_State; idx: Integer; n: lua_Integer); cdecl; external LUA_LIB_NAME;
-procedure lua_rawsetp(L: Plua_State; idx: Integer; p: Pointer); cdecl; external LUA_LIB_NAME;
-function lua_setmetatable(L: Plua_State; objindex: Integer): Integer; cdecl; external LUA_LIB_NAME;
-function lua_setiuservalue(L: Plua_State; idx, n: Integer): Integer; cdecl; external LUA_LIB_NAME;
-procedure lua_callk(L: Plua_State; nargs, nresults: Integer; ctx: lua_KContext; k: lua_KFunction); cdecl; external LUA_LIB_NAME;
-function lua_pcallk(L: Plua_State; nargs, nresults, errfunc: Integer; ctx: lua_KContext; k: lua_KFunction): Integer; cdecl; external LUA_LIB_NAME;
-function lua_load(L: Plua_State; reader: lua_Reader; dt: Pointer; const chunkname, mode: PAnsiChar): Integer; cdecl; external LUA_LIB_NAME;
-function lua_dump(L: Plua_State; writer: lua_Writer; data: Pointer; strip: Integer): Integer; cdecl; external LUA_LIB_NAME;
-function lua_yieldk(L: Plua_State; nresults: Integer; ctx: lua_KContext; k: lua_KFunction): Integer; cdecl; external LUA_LIB_NAME;
+function lua_pushvfstring(L: Plua_State; const fmt: PAnsiChar; argp: Pointer): PAnsiChar; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function lua_pushfstring(L: Plua_State; const fmt: PAnsiChar): PAnsiChar; cdecl; varargs; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+procedure lua_pushcclosure(L: Plua_State; fn: lua_CFunction; n: Integer); cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+procedure lua_pushboolean(L: Plua_State; b: LongBool); cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+procedure lua_pushlightuserdata(L: Plua_State; p: Pointer); cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+procedure lua_pushthread(L: Plua_State); cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function lua_getglobal(L: Plua_State; const name: PAnsiChar): Integer; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function lua_gettable(L: Plua_State; idx: Integer): Integer; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function lua_getfield(L: Plua_state; idx: Integer; k: PAnsiChar): Integer; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function lua_geti(L: Plua_State; idx: Integer; n: lua_Integer): Integer cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function lua_rawget(L: Plua_State; idx: Integer): Integer; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function lua_rawgeti(L: Plua_State; idx: Integer; n: lua_Integer): Integer; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function lua_rawgetp(L: Plua_State; idx: Integer; p: Pointer): Integer; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+procedure lua_createtable(L: Plua_State; narr, nrec: Integer); cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function lua_newuserdatauv(L: Plua_State; sz: size_t; nuvalue: Integer): Pointer; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function lua_getmetatable(L: Plua_State; objindex: Integer): Integer; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function lua_getiuservalue(L: Plua_State; idx, n: Integer): Integer; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+procedure lua_setglobal(L: Plua_State; const name: PAnsiChar); cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+procedure lua_settable(L: Plua_State; idx: Integer); cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+procedure lua_setfield(L: Plua_State; idx: Integer; k: PAnsiChar); cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+procedure lua_seti(L: Plua_State; idx: Integer; n: lua_Integer); cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+procedure lua_rawset(L: Plua_State; idx: Integer); cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+procedure lua_rawseti(L: Plua_State; idx: Integer; n: lua_Integer); cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+procedure lua_rawsetp(L: Plua_State; idx: Integer; p: Pointer); cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function lua_setmetatable(L: Plua_State; objindex: Integer): Integer; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function lua_setiuservalue(L: Plua_State; idx, n: Integer): Integer; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+procedure lua_callk(L: Plua_State; nargs, nresults: Integer; ctx: lua_KContext; k: lua_KFunction); cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function lua_pcallk(L: Plua_State; nargs, nresults, errfunc: Integer; ctx: lua_KContext; k: lua_KFunction): Integer; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function lua_load(L: Plua_State; reader: lua_Reader; dt: Pointer; const chunkname, mode: PAnsiChar): Integer; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function lua_dump(L: Plua_State; writer: lua_Writer; data: Pointer; strip: Integer): Integer; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function lua_yieldk(L: Plua_State; nresults: Integer; ctx: lua_KContext; k: lua_KFunction): Integer; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
 
 procedure lua_call(L: Plua_State; nargs, nresults: Integer);
 begin
@@ -676,23 +872,23 @@ begin
    Result := lua_yieldk(L, nresults, nil, nil);
 end;
 
-function lua_resume(L, from: Plua_State; narg: Integer; nres: PInteger): Integer; cdecl; external LUA_LIB_NAME;
-function lua_status(L: Plua_State): Integer; cdecl; external LUA_LIB_NAME;
-function lua_isyieldable(L: Plua_State): LongBool; cdecl; external LUA_LIB_NAME;
+function lua_resume(L, from: Plua_State; narg: Integer; nres: PInteger): Integer; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function lua_status(L: Plua_State): Integer; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function lua_isyieldable(L: Plua_State): LongBool; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
 
-procedure lua_setwarnf(L: Plua_State; f: lua_WarnFunction; ud: Pointer); cdecl; external LUA_LIB_NAME;
-procedure lua_warning(L: Plua_State; msg: PAnsiChar; tocont: Integer); cdecl; external LUA_LIB_NAME;
+procedure lua_setwarnf(L: Plua_State; f: lua_WarnFunction; ud: Pointer); cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+procedure lua_warning(L: Plua_State; msg: PAnsiChar; tocont: Integer); cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
 
-function lua_gc(L: Plua_State; what: Integer): Integer; cdecl; varargs; external LUA_LIB_NAME;
-function lua_error(L: Plua_State): Integer; cdecl; external LUA_LIB_NAME;
-function lua_next(L: Plua_State; idx: Integer): Integer; cdecl; external LUA_LIB_NAME;
-procedure lua_concat(L: Plua_State; n: Integer); cdecl; external LUA_LIB_NAME;
-procedure lua_len(L: Plua_State; idx: Integer); cdecl; external LUA_LIB_NAME;
-function lua_stringtonumber(L: Plua_State; const s: PAnsiChar): size_t; cdecl; external LUA_LIB_NAME;
-function lua_getallocf(L: Plua_State; ud: PPointer): lua_Alloc; cdecl; external LUA_LIB_NAME;
-procedure lua_setallocf(L: Plua_State; f: lua_Alloc; ud: Pointer); cdecl; external LUA_LIB_NAME;
+function lua_gc(L: Plua_State; what: Integer): Integer; cdecl; varargs; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function lua_error(L: Plua_State): Integer; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function lua_next(L: Plua_State; idx: Integer): Integer; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+procedure lua_concat(L: Plua_State; n: Integer); cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+procedure lua_len(L: Plua_State; idx: Integer); cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function lua_stringtonumber(L: Plua_State; const s: PAnsiChar): size_t; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function lua_getallocf(L: Plua_State; ud: PPointer): lua_Alloc; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+procedure lua_setallocf(L: Plua_State; f: lua_Alloc; ud: Pointer); cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
 
-procedure lua_toclose(L: Plua_State; idx: Integer); cdecl; external LUA_LIB_NAME;
+procedure lua_toclose(L: Plua_State; idx: Integer); cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
 
 function lua_getextraspace(L: Plua_State): Pointer;
 const
@@ -802,47 +998,45 @@ begin
    Result := lua_setiuservalue(L, idx, 1);
 end;
 
-function lua_getstack(L: Plua_State; level: Integer; ar: Plua_Debug): Integer; cdecl; external LUA_LIB_NAME;
-function lua_getinfo(L: Plua_State; const what: PAnsiChar; ar: Plua_Debug): Integer; cdecl; external LUA_LIB_NAME;
-function lua_getlocal(L: Plua_State; const ar: Plua_Debug; n: Integer): PAnsiChar; cdecl; external LUA_LIB_NAME;
-function lua_setlocal(L: Plua_State; const ar: Plua_Debug; n: Integer): PAnsiChar; cdecl; external LUA_LIB_NAME;
-function lua_getupvalue(L: Plua_State; funcindex, n: Integer): PAnsiChar; cdecl; external LUA_LIB_NAME;
-function lua_setupvalue(L: Plua_State; funcindex, n: Integer): PAnsiChar; cdecl; external LUA_LIB_NAME;
-function lua_upvalueid(L: Plua_State; funcindex, n: Integer): Pointer; cdecl; external LUA_LIB_NAME;
-procedure lua_upvaluejoin(L: Plua_State; funcindex1, n1, funcindex2, n2: Integer); cdecl; external LUA_LIB_NAME;
-procedure lua_sethook(L: Plua_State; func: lua_Hook; mask: Integer; count: Integer); cdecl; external LUA_LIB_NAME;
-function lua_gethook(L: Plua_State): lua_Hook; cdecl; external LUA_LIB_NAME;
-function lua_gethookmask(L: Plua_State): Integer; cdecl; external LUA_LIB_NAME;
-function lua_gethookcount(L: Plua_State): Integer; cdecl; external LUA_LIB_NAME;
+function lua_getstack(L: Plua_State; level: Integer; ar: Plua_Debug): Integer; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function lua_getinfo(L: Plua_State; const what: PAnsiChar; ar: Plua_Debug): Integer; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function lua_getlocal(L: Plua_State; const ar: Plua_Debug; n: Integer): PAnsiChar; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function lua_setlocal(L: Plua_State; const ar: Plua_Debug; n: Integer): PAnsiChar; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function lua_getupvalue(L: Plua_State; funcindex, n: Integer): PAnsiChar; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function lua_setupvalue(L: Plua_State; funcindex, n: Integer): PAnsiChar; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function lua_upvalueid(L: Plua_State; funcindex, n: Integer): Pointer; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+procedure lua_upvaluejoin(L: Plua_State; funcindex1, n1, funcindex2, n2: Integer); cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+procedure lua_sethook(L: Plua_State; func: lua_Hook; mask: Integer; count: Integer); cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function lua_gethook(L: Plua_State): lua_Hook; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function lua_gethookmask(L: Plua_State): Integer; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function lua_gethookcount(L: Plua_State): Integer; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
 
-function lua_setcstacklimit(L: Plua_State; limit: Cardinal): Integer; cdecl; external LUA_LIB_NAME;
-
-procedure luaL_checkversion_(L: Plua_State; ver: lua_Number; sz: size_t); cdecl; external LUA_LIB_NAME;
+procedure luaL_checkversion_(L: Plua_State; ver: lua_Number; sz: size_t); cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
 
 procedure luaL_checkversion(L: Plua_State);
 begin
    luaL_checkversion_(L, LUA_VERSION_NUM, LUAL_NUMSIZES);
 end;
 
-procedure luaL_traceback(L, L1: Plua_State; msg: PAnsiChar; level: Integer); cdecl; external LUA_LIB_NAME;
-function luaL_argerror(L: Plua_State; arg: Integer; const extramsg: PAnsiChar): Integer; cdecl; external LUA_LIB_NAME;
-function luaL_typeerror(L: Plua_State; arg: Integer; tname: PAnsiChar): Integer; cdecl; external LUA_LIB_NAME;
-procedure luaL_where(L: Plua_State; lvl: Integer); cdecl; external LUA_LIB_NAME;
-function luaL_newmetatable(L: Plua_State; const tname: PAnsiChar): Integer; cdecl; external LUA_LIB_NAME;
-procedure luaL_setmetatable(L: Plua_State; const tname: PAnsiChar); cdecl; external LUA_LIB_NAME;
-function luaL_testudata(L: Plua_State; ud: Integer; const tname: PAnsiChar): Pointer; cdecl; external LUA_LIB_NAME;
-function luaL_checkudata(L: Plua_State; ud: Integer; const tname: PAnsiChar): Pointer; cdecl; external LUA_LIB_NAME;
-function luaL_error(L: Plua_State; const fmt: PAnsiChar): Integer; cdecl; varargs; external LUA_LIB_NAME;
-function luaL_checkoption(L: Plua_State; arg: Integer; def: PAnsiChar; lst: PPAnsiChar): Integer; cdecl; external LUA_LIB_NAME;
-procedure luaL_checkstack(L: Plua_State; sz: Integer; const msg: PAnsiChar); cdecl; external LUA_LIB_NAME;
-procedure luaL_checktype(L: Plua_State; arg, t: Integer); cdecl; external LUA_LIB_NAME;
-procedure luaL_checkany(L: Plua_State; arg: Integer); cdecl; external LUA_LIB_NAME;
-function luaL_checklstring(L: Plua_State; arg: Integer; l_: Psize_t): PAnsiChar; cdecl; external LUA_LIB_NAME;
-function luaL_optlstring(L: Plua_State; arg: Integer; const def: PAnsiChar; l_: Psize_t): PAnsiChar; cdecl; external LUA_LIB_NAME;
-function luaL_checknumber(L: Plua_State; arg: Integer): lua_Number; cdecl; external LUA_LIB_NAME;
-function luaL_optnumber(L: Plua_State; arg: Integer; def: lua_Number): lua_Number; cdecl; external LUA_LIB_NAME;
-function luaL_checkinteger(L: Plua_State; arg: Integer): lua_Integer; cdecl; external LUA_LIB_NAME;
-function luaL_optinteger(L: Plua_State; arg: Integer; def: lua_Integer): lua_Integer; cdecl; external LUA_LIB_NAME;
+procedure luaL_traceback(L, L1: Plua_State; msg: PAnsiChar; level: Integer); cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function luaL_argerror(L: Plua_State; arg: Integer; const extramsg: PAnsiChar): Integer; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function luaL_typeerror(L: Plua_State; arg: Integer; tname: PAnsiChar): Integer; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+procedure luaL_where(L: Plua_State; lvl: Integer); cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function luaL_newmetatable(L: Plua_State; const tname: PAnsiChar): Integer; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+procedure luaL_setmetatable(L: Plua_State; const tname: PAnsiChar); cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function luaL_testudata(L: Plua_State; ud: Integer; const tname: PAnsiChar): Pointer; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function luaL_checkudata(L: Plua_State; ud: Integer; const tname: PAnsiChar): Pointer; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function luaL_error(L: Plua_State; const fmt: PAnsiChar): Integer; cdecl; varargs; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function luaL_checkoption(L: Plua_State; arg: Integer; def: PAnsiChar; lst: PPAnsiChar): Integer; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+procedure luaL_checkstack(L: Plua_State; sz: Integer; const msg: PAnsiChar); cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+procedure luaL_checktype(L: Plua_State; arg, t: Integer); cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+procedure luaL_checkany(L: Plua_State; arg: Integer); cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function luaL_checklstring(L: Plua_State; arg: Integer; l_: Psize_t): PAnsiChar; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function luaL_optlstring(L: Plua_State; arg: Integer; const def: PAnsiChar; l_: Psize_t): PAnsiChar; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function luaL_checknumber(L: Plua_State; arg: Integer): lua_Number; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function luaL_optnumber(L: Plua_State; arg: Integer; def: lua_Number): lua_Number; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function luaL_checkinteger(L: Plua_State; arg: Integer): lua_Integer; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function luaL_optinteger(L: Plua_State; arg: Integer; def: lua_Integer): lua_Integer; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
 
 procedure luaL_argcheck(L: Plua_State; cond: Boolean; arg: Integer; extramsg: PAnsiChar);
 begin
@@ -890,12 +1084,12 @@ begin
    lua_getfield(L, LUA_REGISTRYINDEX, tname);
 end;
 
-function luaL_fileresult(L: Plua_State; stat: Integer; const fname: PAnsiChar): Integer; cdecl; external LUA_LIB_NAME;
-function luaL_execresult(L: Plua_State; stat: Integer): Integer; cdecl; external LUA_LIB_NAME;
-function luaL_ref(L: Plua_State; t: Integer): Integer; cdecl; external LUA_LIB_NAME;
-procedure luaL_unref(L: Plua_State; t, ref: Integer); cdecl; external LUA_LIB_NAME;
-function luaL_loadfilex(L: Plua_State; const filename, mode: PAnsiChar): Integer; cdecl; external LUA_LIB_NAME;
-function luaL_loadbufferx(L: Plua_State; const buff: PAnsiChar; sz: size_t; const name, mode: PAnsiChar): Integer; cdecl; external LUA_LIB_NAME;
+function luaL_fileresult(L: Plua_State; stat: Integer; const fname: PAnsiChar): Integer; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function luaL_execresult(L: Plua_State; stat: Integer): Integer; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function luaL_ref(L: Plua_State; t: Integer): Integer; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+procedure luaL_unref(L: Plua_State; t, ref: Integer); cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function luaL_loadfilex(L: Plua_State; const filename, mode: PAnsiChar): Integer; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function luaL_loadbufferx(L: Plua_State; const buff: PAnsiChar; sz: size_t; const name, mode: PAnsiChar): Integer; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
 
 function luaL_loadfile(L: Plua_State; const filename: PAnsiChar): Integer;
 begin
@@ -912,24 +1106,29 @@ begin
   lua_pushnil(L);
 end;
 
-function luaL_loadstring(L: Plua_State; const s: PAnsiChar): Integer; cdecl; external LUA_LIB_NAME;
-function luaL_getmetafield(L: Plua_State; obj: Integer; const e: PAnsiChar): Integer; cdecl; external LUA_LIB_NAME;
-function luaL_callmeta(L: Plua_State; obj: Integer; const e: PAnsiChar): Integer; cdecl; external LUA_LIB_NAME;
-function luaL_tolstring(L: Plua_State; idx: Integer; len: Psize_t): PAnsiChar; cdecl; external LUA_LIB_NAME;
-procedure luaL_requiref(L: Plua_State; const modname: PAnsiChar; openf: lua_CFunction; glb: LongBool); cdecl; external LUA_LIB_NAME;
-procedure luaL_setfuncs(L: Plua_State; lr: PluaL_Reg; nup: Integer); cdecl; external LUA_LIB_NAME;
+function luaL_loadstring(L: Plua_State; const s: PAnsiChar): Integer; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function luaL_getmetafield(L: Plua_State; obj: Integer; const e: PAnsiChar): Integer; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function luaL_callmeta(L: Plua_State; obj: Integer; const e: PAnsiChar): Integer; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function luaL_tolstring(L: Plua_State; idx: Integer; len: Psize_t): PAnsiChar; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+procedure luaL_requiref(L: Plua_State; const modname: PAnsiChar; openf: lua_CFunction; glb: LongBool); cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+procedure _luaL_setfuncs(L: Plua_State; lr: PluaL_Reg; nup: Integer); cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF} name 'luaL_setfuncs';
 
-procedure luaL_setfuncs(L: Plua_State; lr: array of luaL_Reg; nup: Integer);
+procedure luaL_setfuncs(L: Plua_State; lr: PluaL_Reg; nup: Integer); cdecl; overload;
+begin
+   _luaL_setfuncs(L, lr, nup);
+end;
+
+procedure luaL_setfuncs(L: Plua_State; lr: array of luaL_Reg; nup: Integer); overload;
 begin
    luaL_setfuncs(L, @lr, nup);
 end;
 
-procedure luaL_newlibtable(L: Plua_State; lr: array of luaL_Reg);
+procedure luaL_newlibtable(L: Plua_State; lr: array of luaL_Reg); overload;
 begin
    lua_createtable(L, 0, High(lr));
 end;
 
-procedure luaL_newlibtable(L: Plua_State; lr: PluaL_Reg);
+procedure luaL_newlibtable(L: Plua_State; lr: PluaL_Reg); overload;
 var
   n: Integer;
 begin
@@ -941,36 +1140,57 @@ begin
   lua_createtable(L, 0, n);
 end;
 
-procedure luaL_newlib(L: Plua_State; lr: array of luaL_Reg);
+procedure luaL_newlib(L: Plua_State; lr: array of luaL_Reg); overload;
 begin
    luaL_checkversion(L);
    luaL_newlibtable(L, lr);
    luaL_setfuncs(L, @lr, 0);
 end;
 
-procedure luaL_newlib(L: Plua_State; lr: PluaL_Reg);
+procedure luaL_newlib(L: Plua_State; lr: PluaL_Reg); overload;
 begin
    luaL_checkversion(L);
    luaL_newlibtable(L, lr);
    luaL_setfuncs(L, lr, 0);
 end;
 
-function luaL_gsub(L: Plua_State; const s, p, r: PAnsiChar): PAnsiChar; cdecl; external LUA_LIB_NAME;
-function luaL_getsubtable(L: Plua_State; idx: Integer; const fname: PAnsiChar): Integer; cdecl; external LUA_LIB_NAME;
-function luaL_newstate: Plua_State; cdecl; external LUA_LIB_NAME;
-function luaL_len(L: Plua_State; idx: Integer): lua_Integer; cdecl; external LUA_LIB_NAME;
+function luaL_gsub(L: Plua_State; const s, p, r: PAnsiChar): PAnsiChar; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function luaL_getsubtable(L: Plua_State; idx: Integer; const fname: PAnsiChar): Integer; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function luaL_makeseed(L: Plua_State): Cardinal; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function luaL_newstate: Plua_State; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function luaL_len(L: Plua_State; idx: Integer): lua_Integer; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
 
-function luaopen_base(L: Plua_State): Integer; cdecl; external LUA_LIB_NAME;
-function luaopen_coroutine(L: Plua_State): Integer; cdecl; external LUA_LIB_NAME;
-function luaopen_table(L: Plua_State): Integer; cdecl; external LUA_LIB_NAME;
-function luaopen_io(L: Plua_State): Integer; cdecl; external LUA_LIB_NAME;
-function luaopen_os(L: Plua_State): Integer; cdecl; external LUA_LIB_NAME;
-function luaopen_string(L: Plua_State): Integer; cdecl; external LUA_LIB_NAME;
-function luaopen_utf8(L: Plua_State): Integer; cdecl; external LUA_LIB_NAME;
-function luaopen_math(L: Plua_State): Integer; cdecl; external LUA_LIB_NAME;
-function luaopen_debug(L: Plua_State): Integer; cdecl; external LUA_LIB_NAME;
-function luaopen_package(L: Plua_State): Integer; cdecl; external LUA_LIB_NAME;
-procedure luaL_openlibs(L: Plua_State); cdecl; external LUA_LIB_NAME;
+function luaopen_base(L: Plua_State): Integer; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function luaopen_coroutine(L: Plua_State): Integer; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function luaopen_table(L: Plua_State): Integer; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function luaopen_io(L: Plua_State): Integer; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function luaopen_os(L: Plua_State): Integer; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function luaopen_string(L: Plua_State): Integer; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function luaopen_utf8(L: Plua_State): Integer; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function luaopen_math(L: Plua_State): Integer; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function luaopen_debug(L: Plua_State): Integer; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+function luaopen_package(L: Plua_State): Integer; cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+procedure luaL_openselectedlibs(L: Plua_State; load, preload: Integer); cdecl; external {$IFNDEF LUA_STATIC}LUA_LIB_NAME{$ENDIF};
+
+function lua_newstate(f: lua_Alloc; ud: Pointer): Plua_State; cdecl;
+begin
+   Result := _lua_newstate(f, ud, luaL_makeseed(nil));
+end;
+
+function lua_resetthread(L: Plua_State): Integer; cdecl;
+begin
+   Result := lua_closethread(L, nil);
+end;
+
+function lua_setcstacklimit(L: Plua_State; limit: Cardinal): Integer; cdecl;
+begin
+   Result := 0;
+end;
+
+procedure luaL_openlibs(L: Plua_State); cdecl;
+begin
+   luaL_openselectedlibs(L, -1, 0);
+end;
 
 (* UTILITY FUNCTIONS *)
 (* ============================================================================ *)

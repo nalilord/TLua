@@ -412,7 +412,7 @@ type
     FLuaNewHandler: TLuaCFunctionEvent;
     FOnDefaultPropertyGet: TLuaClassDefaultPropertyEvent;
     FOnDefaultPropertySet: TLuaClassDefaultPropertyEvent;
-    FOnConstructon: TLuaClassConstructionEvent;
+    FOnConstruction: TLuaClassConstructionEvent;
     FOnGarbageCollection: TLuaClassGarbageCollectionEvent;
     FOnRelease: TLuaClassReleaseEvent;
     FParent: TLuaClassBlueprint;
@@ -470,7 +470,7 @@ type
     property Properties[Index: Integer]: String                   read GetProperties;
     property IndexProperties[Index: Integer]: String              read GetIndexProperties;
     property AllowConstruct: Boolean                              read FAllowConstruct       write FAllowConstruct;
-    property OnConstructon: TLuaClassConstructionEvent            read FOnConstructon        write FOnConstructon;
+    property OnConstruction: TLuaClassConstructionEvent           read FOnConstruction       write FOnConstruction;
     property OnRelease: TLuaClassReleaseEvent                     read FOnRelease            write FOnRelease;
     property OnGarbageCollection: TLuaClassGarbageCollectionEvent read FOnGarbageCollection  write FOnGarbageCollection;
     property OnDefaultPropertyGet: TLuaClassDefaultPropertyEvent  read FOnDefaultPropertyGet write FOnDefaultPropertyGet;
@@ -568,6 +568,7 @@ type
     procedure LuaNewIndexHandler(Sender: TLua; Clazz: TLuaClass; Access, Value: TLuaValue);
     function HashOf(const AName: String): Cardinal;
     function Find(const AName: String; var AItem: LibConstant): Integer;
+    function FindFunction(const AName: String): Integer;
   public
     destructor Destroy; override;
     procedure AddFunction(AName: String; ACallback: TLuaMethodEvent);
@@ -580,6 +581,10 @@ type
     FStatus: TLuaStateStatus;
     FState: TLuaState;
     FMemoryUsage: NativeInt;
+    FLastErrorCode: Integer;
+    FLastErrorName: String;
+    FLastErrorMessage: String;
+    FLastErrorLuaMessage: String;
     FScriptName: String;
     FScriptSource: TStrings;
     FVolatile: Boolean;
@@ -589,7 +594,9 @@ type
     FClassBlueprints: TObjectList<TLuaClassBlueprint>;
     FClassInheritor: TLuaClassInheritor;
     FFunctions: THashedStringList;
+    function GetScriptText: String;
     procedure SetScriptSource(const Value: TStrings);
+    procedure SetScriptText(const Value: String);
     function GetGlobals(Name: String): Variant;
     procedure SetGlobals(Name: String; const Value: Variant);
     function GetTables(Name: String): TLuaTable;
@@ -599,6 +606,8 @@ type
   strict protected
     constructor Create(AState: TLuaState); overload;
   protected
+    procedure ClearLastError;
+    function GetRefOwner: TLua;
     procedure PreCleanup;
     procedure HandleLuaError(AException: ELuaException);
     procedure NotifyCleanup(ASubject: TObject; AOperation: TOperation);
@@ -622,19 +631,26 @@ type
     function NewLibrary(AName: String = ''): TLuaLibrary;
     function NewThread: TLuaThread;
     function LoadSource(AFileName: String): Boolean;
+    function LoadFromFile(AFileName: String): Boolean;
     function Execute: Boolean;
     function ExecuteDirect(ASource: String): Boolean;
+    function ExecuteText(ASource: String): Boolean;
     property State: TLuaState                           read FState;
     property IsVolatile: Boolean                        read FVolatile;
     property Functions[Name: String]: TLuaFunction      read GetFunctions;
     property Classes[Name: String]: TLuaClassBlueprint  read GetClasses;
     property Globals[Name: String]: Variant             read GetGlobals   write SetGlobals;
     property Tables[Name: String]: TLuaTable            read GetTables    write SetTables;
+    property LastErrorCode: Integer                     read FLastErrorCode;
+    property LastErrorName: String                      read FLastErrorName;
+    property LastErrorMessage: String                   read FLastErrorMessage;
+    property LastErrorLuaMessage: String                read FLastErrorLuaMessage;
   published
     property MemoryUsage: NativeInt read FMemoryUsage;
     property Stack: TLuaStack       read FStack;
     property ScriptName: String     read FScriptName   write FScriptName;
     property ScriptSource: TStrings read FScriptSource write SetScriptSource;
+    property ScriptText: String     read GetScriptText write SetScriptText;
   end;
 
   TLuaThread = class(TPersistent)
@@ -643,7 +659,10 @@ type
     FThread: TLuaState;
     FOwned: Boolean;
     FRefId: Integer;
-    FLastErrorMessage: String;
+    FLastErrorCode: Integer;
+    FLastErrorName: String;
+    FLastErrorCategory: String;
+    FLastErrorLuaMessage: String;
     FStack: TLuaStack;
   protected
     constructor Create(ALua: TLua); overload;
@@ -652,6 +671,11 @@ type
     destructor Destroy; override;
     function Execute(AString: String): Boolean;
     property Stack: TLuaStack read FStack;
+    property LastErrorCode: Integer read FLastErrorCode;
+    property LastErrorName: String read FLastErrorName;
+    property LastErrorCategory: String read FLastErrorCategory;
+    property LastErrorMessage: String read FLastErrorLuaMessage;
+    property LastErrorLuaMessage: String read FLastErrorLuaMessage;
   end;
 
   TLuaStack = class(TPersistent)
@@ -1456,6 +1480,12 @@ begin
         // Get args
         Args:=TLuaArgs.Create(Lua);
 
+        if (NOT Assigned(Clazz)) AND (Args.Count > 0) AND Args[0].IsClass then
+        begin
+          Clazz:=Args[0].AsClass;
+          Args.Purge(0);
+        end;
+
         // Call the target
         if Assigned(Clazz) then
         begin
@@ -1715,7 +1745,7 @@ begin
 
   Result:=FLua.Stack.Ref(LUA_REGISTRYINDEX);
 
-  TLuaInternalCore.GetInstance.AddRef(Result, FLua);
+  TLuaInternalCore.GetInstance.AddRef(Result, FLua.GetRefOwner);
 end;
 
 procedure TLuaObject.UnRef;
@@ -2982,6 +3012,7 @@ var
 begin
   Res:=0;
   Result:=False;
+  FLua.ClearLastError;
 
   // Top Index before call
   I:=FLua.Stack.Top;
@@ -3390,7 +3421,7 @@ begin
   // Apply existing events
   Result.OnDefaultPropertyGet:=FOnDefaultPropertyGet;
   Result.OnDefaultPropertySet:=FOnDefaultPropertySet;
-  Result.OnConstructon:=FOnConstructon;
+  Result.OnConstruction:=FOnConstruction;
   Result.OnRelease:=FOnRelease;
   Result.OnGarbageCollection:=FOnGarbageCollection;
 
@@ -3474,9 +3505,9 @@ end;
 
 procedure TLuaClassBlueprint.LuaNewHandler(Sender: TLua; Blueprint: TLuaClassBlueprint; Args: TLuaArgs; var UserClass: TObject; var Allow: Boolean);
 begin
-  if Assigned(FOnConstructon) then
+  if Assigned(FOnConstruction) then
   begin
-    FOnConstructon(Sender, Blueprint, Args, UserClass, Allow);
+    FOnConstruction(Sender, Blueprint, Args, UserClass, Allow);
   end;
 end;
 
@@ -3887,19 +3918,39 @@ end;
 
 procedure TLuaClass.LuaInheritedHandler(Sender: TLua; Clazz: TLuaClass; Args: TLuaArgs; Results: TLuaResults);
 var
+  I: Integer;
+  MethodName: String;
   LuaInfo: lua_Debug;
+  Invoker: TLuaClassMethodInvoker;
 begin
+  MethodName:='';
+
+  if Args.Check([ltString]) then
+  begin
+    MethodName:=Args[0].AsStr;
+  end else
+  if Args.Check([ltClass, ltString]) then
+  begin
+    MethodName:=Args[1].AsStr;
+  end else
   if (lua_getstack(Lua.State, 1, @LuaInfo) <> 0) AND (lua_getinfo(Lua.State, 'nSl', @LuaInfo) <> 0) then
   begin
-    if Trim(String(AnsiString(LuaInfo.name))) <> '' then
+    MethodName:=Trim(String(AnsiString(LuaInfo.name)));
+  end;
+
+  if MethodName <> '' then
+  begin
+    Invoker:=Clazz.Inherit(MethodName);
+    if Assigned(Invoker) then
     begin
-      with Clazz.Inherit(String(AnsiString(LuaInfo.name))) do
-      begin
-        try
-          Execute;
-        finally
-          Free;
+      try
+        Invoker.Execute;
+        for I:=0 to Invoker.Results.Count - 1 do
+        begin
+          Results.PushValue(Invoker.Results[I]);
         end;
+      finally
+        Invoker.Free;
       end;
     end;
   end;
@@ -4165,10 +4216,12 @@ end;
 
 function TLuaClassMethodInvoker.Execute: Boolean;
 var
-  Res: Integer;
+  Res, I, TopBefore: Integer;
 begin
   Res:=0;
   Result:=False;
+  FLua.ClearLastError;
+  TopBefore:=FLua.Stack.Top;
 
   // **                                            ** //
   // Do we need all this shit if it is a native call? //
@@ -4210,6 +4263,18 @@ begin
       FLua.Stack.Pop;
     end;
   end;
+
+  // Clear previous results
+  FResults.Update(0);
+
+  // Fetch new results from the stack
+  FResults.FCount:=Abs(FLua.Stack.Top - TopBefore);
+  for I:=FResults.FCount - 1 downto 0 do
+  begin
+    FResults.FValues.Add(TLuaValue.New(FLua, -(I + 1)));
+  end;
+
+  FLua.Stack.Pop(FResults.FCount);
 end;
 
 destructor TLuaClassMethodInvoker.Destroy;
@@ -4274,15 +4339,23 @@ begin
 end;
 
 procedure TLuaClassInheritor.LuaInheritMethod(Sender: TLua; Args: TLuaArgs; Results: TLuaResults);
+var
+  I: Integer;
+  Invoker: TLuaClassMethodInvoker;
 begin
   if Args.Check([ltClass, ltString], False) then
   begin
-    with Args[0].AsClass.Inherit(Args[1].AsStr) do
+    Invoker:=Args[0].AsClass.Inherit(Args[1].AsStr);
+    if Assigned(Invoker) then
     begin
       try
-        Execute;
+        Invoker.Execute;
+        for I:=0 to Invoker.Results.Count - 1 do
+        begin
+          Results.PushValue(Invoker.Results[I]);
+        end;
       finally
-        Free;
+        Invoker.Free;
       end;
     end;
   end;
@@ -4362,6 +4435,21 @@ begin
 
 end;
 
+function TLuaLibrary.FindFunction(const AName: String): Integer;
+var
+  I: Integer;
+begin
+  Result:=-1;
+
+  for I:=0 to FFunctions.Count - 1 do
+  begin
+    if AnsiSameText(AName, FFunctions[I].N) then
+    begin
+      Exit(I);
+    end;
+  end;
+end;
+
 function TLuaLibrary.Find(const AName: String; var AItem: LibConstant): Integer;
 var
   Hash, Pos: Integer;
@@ -4412,22 +4500,40 @@ end;
 
 procedure TLuaLibrary.AddConstant(AName: String; AValue: Variant);
 var
+  Existing: LibConstant;
+  Pos: Integer;
   Entry: LibConstant;
 begin
   Entry.N:=AName;
   Entry.V:=AValue;
 
-  FConstants[HashOf(AName) MOD Cardinal(Length(FConstants))].Add(Entry);
+  Pos:=Find(AName, Existing);
+  if Pos >= 0 then
+  begin
+    FConstants[HashOf(AName) MOD Cardinal(Length(FConstants))][Pos]:=Entry;
+  end else
+  begin
+    FConstants[HashOf(AName) MOD Cardinal(Length(FConstants))].Add(Entry);
+  end;
 end;
 
 procedure TLuaLibrary.AddFunction(AName: String; ACallback: TLuaMethodEvent);
 var
+  Idx: Integer;
   Entry: LibFunction;
 begin
   Entry.N:=AName;
   Entry.C:=TLuaCallbackWrapper.New(ACallback).Callback;
 
-  FFunctions.Add(Entry);
+  Idx:=FindFunction(AName);
+  if Idx >= 0 then
+  begin
+    TLuaCallbackWrapper.Release(FFunctions[Idx].C);
+    FFunctions[Idx]:=Entry;
+  end else
+  begin
+    FFunctions.Add(Entry);
+  end;
 end;
 
 { TLua }
@@ -4443,6 +4549,7 @@ begin
   FClassBlueprints:=TObjectList<TLuaClassBlueprint>.Create;
   FErrorHandlers:=TInterfaceList.Create;
   FFunctions:=THashedStringList.Create(dupError, True, False);
+  ClearLastError;
 
   // Create lua state and open default libs
   FState:=lua_newstate(LuaDefaultAllocator, Self);
@@ -4474,6 +4581,7 @@ begin
   FClassBlueprints:=TObjectList<TLuaClassBlueprint>.Create;
   FErrorHandlers:=TInterfaceList.Create;
   FFunctions:=THashedStringList.Create;
+  ClearLastError;
 
   // Save state
   FState:=AState;
@@ -4564,6 +4672,7 @@ var
 begin
   Res:=0;
   Result:=False;
+  ClearLastError;
 
   try
     Res:=luaL_loadbuffer(FState, PAnsiChar(AnsiString(Trim(FScriptSource.Text))), Trim(FScriptSource.Text).Length, PAnsiChar(AnsiString(FScriptName)));
@@ -4609,15 +4718,64 @@ function TLua.ExecuteDirect(ASource: String): Boolean;
 var
   State: TLuaState;
   RefId: Integer;
+  Res: Integer;
+  ContextName: String;
 begin
+  Res:=0;
   State:=lua_newthread(FState);
+  ClearLastError;
+
+  ContextName:=Trim(FScriptName);
+  if ContextName = '' then
+    ContextName:='<direct>';
 
   RefId:=luaL_ref(FState, LUA_REGISTRYINDEX);
   try
-    Result:=luaL_dostring(State, PAnsiChar(AnsiString(ASource))) = LUA_OK;
+    Result:=False;
+
+    try
+      Res:=luaL_loadstring(State, PAnsiChar(AnsiString(ASource)));
+
+      case Res of
+        LUA_ERRSYNTAX: raise ELuaLoadException.Create('Syntax error during precompilation');
+        LUA_ERRMEM: raise ELuaLoadException.Create('Memory allocation error');
+      end;
+
+      if Res <> LUA_OK then
+      begin
+        raise ELuaLoadException.Create('Cannot load string for script');
+      end;
+
+      Res:=lua_pcall(State, 0, LUA_MULTRET, 0);
+
+      case Res of
+        LUA_ERRRUN: raise ELuaExecuteException.Create('Runtime error');
+        LUA_ERRMEM: raise ELuaExecuteException.Create('Memory allocation error');
+        LUA_ERRSYNTAX: raise ELuaExecuteException.Create('Syntax error');
+        LUA_ERRERR: raise ELuaExecuteException.Create('Error handling function failed');
+      end;
+
+      Result:=Res = LUA_OK;
+    except
+      on E: ELuaException do
+      begin
+        E.FName:=ContextName;
+        E.FCode:=Res;
+        E.FLuaMessage:=String(System.AnsiStrings.StrPas(lua_tostring(State, -1)));
+
+        HandleLuaError(E);
+
+        lua_pop(State, 1);
+      end;
+    end;
   finally
     luaL_unref(FState, LUA_REGISTRYINDEX, RefId);
   end;
+end;
+
+function TLua.ExecuteText(ASource: String): Boolean;
+begin
+  Result:=ExecuteDirect(ASource);
 end;
 
 function TLua.GetFunctions(Name: String): TLuaFunction;
@@ -4658,14 +4816,36 @@ end;
 function TLua.LoadSource(AFileName: String): Boolean;
 begin
   Result:=False;
+  ClearLastError;
 
   if FileExists(AFileName) then
   begin
-    FScriptName:=ExtractFileName(AFileName);
-    FScriptSource.LoadFromFile(AFileName);
+    try
+      FScriptName:=ExtractFileName(AFileName);
+      FScriptSource.LoadFromFile(AFileName);
 
-    Result:=True;
+      Result:=True;
+    except
+      on E: Exception do
+      begin
+        FLastErrorCode:=LUA_ERRFILE;
+        FLastErrorName:=ExtractFileName(AFileName);
+        FLastErrorMessage:='Cannot load script file';
+        FLastErrorLuaMessage:=E.Message;
+      end;
+    end;
+  end else
+  begin
+    FLastErrorCode:=LUA_ERRFILE;
+    FLastErrorName:=ExtractFileName(AFileName);
+    FLastErrorMessage:='Script file not found';
+    FLastErrorLuaMessage:=AFileName;
   end;
+end;
+
+function TLua.LoadFromFile(AFileName: String): Boolean;
+begin
+  Result:=LoadSource(AFileName);
 end;
 
 function TLua.NewValue(AValue: Variant; AName: String = ''): TLuaValue;
@@ -4762,11 +4942,11 @@ end;
 
 function TLua.PushAndUnref(ARefId: Integer): Integer;
 begin
-  if TLuaInternalCore.GetInstance.HasRef(ARefId, Self) then
+  if TLuaInternalCore.GetInstance.HasRef(ARefId, GetRefOwner) then
   begin
     Result:=FStack.RawGetI(LUA_REGISTRYINDEX, ARefId);
 
-    TLuaInternalCore.GetInstance.RemoveRef(Result, Self);
+    TLuaInternalCore.GetInstance.RemoveRef(ARefId, GetRefOwner);
 
     FStack.UnRef(LUA_REGISTRYINDEX, ARefId);
   end else
@@ -4777,7 +4957,7 @@ end;
 
 function TLua.PushRef(ARefId: Integer): Integer;
 begin
-  if TLuaInternalCore.GetInstance.HasRef(ARefId, Self) then
+  if TLuaInternalCore.GetInstance.HasRef(ARefId, GetRefOwner) then
   begin
     Result:=FStack.RawGetI(LUA_REGISTRYINDEX, ARefId);
   end else
@@ -4838,6 +5018,11 @@ begin
   FScriptSource.Assign(Value);
 end;
 
+procedure TLua.SetScriptText(const Value: String);
+begin
+  FScriptSource.Text:=Value;
+end;
+
 procedure TLua.SetTables(Name: String; const Value: TLuaTable);
 begin
   // Push, if assigned, the table! Otherwise nil
@@ -4856,6 +5041,11 @@ procedure TLua.HandleLuaError(AException: ELuaException);
 var
   I: Integer;
 begin
+  FLastErrorName:=AException.Name;
+  FLastErrorCode:=AException.Code;
+  FLastErrorMessage:=AException.Message;
+  FLastErrorLuaMessage:=AException.LuaMessage;
+
   for I:=0 to FErrorHandlers.Count - 1 do
   begin
     if AException IS ELuaLoadException then
@@ -4867,6 +5057,38 @@ begin
       ILuaErrorHandler(FErrorHandlers[I]).OnScriptExecutionError(AException.Name, AException.Message, AException.Code, AException.LuaMessage);
     end;
   end;
+end;
+
+function TLua.GetRefOwner: TLua;
+begin
+  Result:=Self;
+
+  if FVolatile then
+  begin
+    lua_pushliteral(FState, '__TLua');
+    lua_rawget(FState, LUA_REGISTRYINDEX);
+    try
+      if lua_islightuserdata(FState, -1) then
+      begin
+        Result:=Pointer(lua_topointer(FState, -1));
+      end;
+    finally
+      lua_pop(FState, 1);
+    end;
+  end;
+end;
+
+function TLua.GetScriptText: String;
+begin
+  Result:=FScriptSource.Text;
+end;
+
+procedure TLua.ClearLastError;
+begin
+  FLastErrorCode:=LUA_OK;
+  FLastErrorName:='';
+  FLastErrorMessage:='';
+  FLastErrorLuaMessage:='';
 end;
 
 function TLua.IntroduceFunction(AName: String): Boolean;
@@ -4950,31 +5172,68 @@ end;
 
 function TLuaThread.Execute(AString: String): Boolean;
 var
-  Count: Integer;
+  Res: Integer;
+  ContextName: String;
+  E: ELuaException;
 begin
   Result:=False;
+  Res:=0;
+  FLastErrorCode:=LUA_OK;
+  FLastErrorName:='';
+  FLastErrorCategory:='';
+  FLastErrorLuaMessage:='';
+  FLua.ClearLastError;
+  lua_settop(FThread, 0);
 
-  if luaL_loadstring(FThread, PAnsiChar(AnsiString(AString))) = 0 then
-  begin
-    Count:=lua_gettop(FThread);
-    if lua_pcallk(FThread, 0, LUA_MULTRET, 0, nil, nil) = 0 then
-    begin
-      Count:=Abs(lua_gettop(FThread) - Count);
+  ContextName:=Trim(FLua.ScriptName);
+  if ContextName <> '' then
+    ContextName:=ContextName + ' <thread>'
+  else
+    ContextName:='<thread>';
 
-      // Process results?
-      if Count > 0 then
-      begin
+  FLastErrorName:=ContextName;
 
-      end;
+  try
+    Res:=luaL_loadstring(FThread, PAnsiChar(AnsiString(AString)));
 
-      Result:=True;
-    end else
-    begin
-
+    case Res of
+      LUA_ERRSYNTAX: raise ELuaLoadException.Create('Syntax error during precompilation');
+      LUA_ERRMEM: raise ELuaLoadException.Create('Memory allocation error');
     end;
-  end else
-  begin
-    FLastErrorMessage:=String(System.AnsiStrings.StrPas(lua_tostring(FThread, -1)));
+
+    if Res <> LUA_OK then
+    begin
+      raise ELuaLoadException.Create('Cannot load string for thread');
+    end;
+
+    Res:=lua_pcallk(FThread, 0, LUA_MULTRET, 0, nil, nil);
+
+    case Res of
+      LUA_ERRRUN: raise ELuaExecuteException.Create('Runtime error');
+      LUA_ERRMEM: raise ELuaExecuteException.Create('Memory allocation error');
+      LUA_ERRSYNTAX: raise ELuaExecuteException.Create('Syntax error');
+      LUA_ERRERR: raise ELuaExecuteException.Create('Error handling function failed');
+    end;
+
+    Result:=Res = LUA_OK;
+    lua_settop(FThread, 0);
+  except
+    on Ex: ELuaException do
+    begin
+      E:=Ex;
+      E.FName:=ContextName;
+      E.FCode:=Res;
+      E.FLuaMessage:=String(System.AnsiStrings.StrPas(lua_tostring(FThread, -1)));
+
+      FLastErrorCode:=E.Code;
+      FLastErrorName:=E.Name;
+      FLastErrorCategory:=E.Message;
+      FLastErrorLuaMessage:=E.LuaMessage;
+      FLua.HandleLuaError(E);
+
+      lua_pop(FThread, 1);
+      lua_settop(FThread, 0);
+    end;
   end;
 end;
 
