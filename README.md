@@ -1,6 +1,6 @@
 # TLua
 
-`TLua` is a Delphi wrapper around Lua 5.5.0 for Win32/Win64 applications. It provides a higher-level `TLua` facade over the raw Lua C API and includes helpers for values, tables, functions, threads, libraries, and Delphi class binding.
+`TLua` is a Delphi wrapper around Lua 5.5.0. It provides a higher-level `TLua` facade over the raw Lua C API and includes helpers for values, tables, functions, threads, libraries, and Delphi class binding.
 
 This repository now includes:
 
@@ -14,15 +14,17 @@ This repository now includes:
 - `Demo/` - VCL sample application
 - `Tests/` - console regression project
 - `Dll/` - Lua 5.5.0 C sources / DLL build assets
-- `Runtime/` - canonical Lua runtime DLL copies used by the scripts
+- `Runtime/` - canonical Lua runtime libraries used by the scripts
 - `Bin/` - platform-specific build output folders
 
 ## Requirements
 
 - Delphi 12 Athens or a compatible `dcc32.exe` / `dcc64.exe`
-- Windows runtime DLL beside the executable:
+- Free Pascal (`fpc`) for the Linux build path
+- Canonical runtime libraries:
   - `lua55.dll` for Win32
   - `lua55_64.dll` for Win64
+  - `liblua55.so` for Linux64
 - For the provided shell scripts: WSL with access to the Delphi installation
 - Static mode note:
   - `LUA_STATIC` is currently supported on `Win64` only
@@ -36,6 +38,7 @@ Build the demo:
 ```bash
 ./build.sh Demo/TestApp.dpr Win64
 ./build.sh Demo/TestApp.dpr Win32
+./build.sh Demo/TestApp.dpr Linux64
 ```
 
 Build the regression suite:
@@ -43,9 +46,10 @@ Build the regression suite:
 ```bash
 ./build.sh Tests/TLuaTests.dpr Win64
 ./build.sh Tests/TLuaTests.dpr Win32
+./build.sh Tests/TLuaTests.dpr Linux64
 ```
 
-The script auto-adds the repo `Source` directory to Delphi's search path, selects the matching Delphi compiler for `Win32` or `Win64`, copies the matching Lua runtime DLL, and emits binaries into `Bin/Win32` or `Bin/Win64`.
+The script auto-adds the repo `Source` directory to the compiler search path, selects the matching Delphi compiler for `Win32` or `Win64`, or `fpc` for `Linux64`, refreshes the canonical runtime library under `Runtime/`, and emits runnable outputs into `Bin/Win32`, `Bin/Win64`, or `Bin/Linux64`.
 
 Build the regression suite in static mode:
 
@@ -57,6 +61,7 @@ Optional environment overrides:
 
 - `DCC32` - full path to `dcc32.exe`
 - `DCC64` - full path to `dcc64.exe`
+- `FPC` - Free Pascal compiler command for `Linux64` builds
 - `BDS_VERSION` - Delphi install version used to derive the default compiler path
 - `BUILD_DIR_WIN` - Windows output directory passed to the compiler
 - `DELPHI_PLATFORM` - default target platform when no explicit second argument is provided
@@ -71,6 +76,7 @@ Compile and run the console regression suite:
 ```bash
 ./test.sh Tests/TLuaTests.dpr Win64
 ./test.sh Tests/TLuaTests.dpr Win32
+./test.sh Tests/TLuaTests.dpr Linux64
 DELPHI_DEFINES=LUA_STATIC ./test.sh Tests/TLuaTests.dpr Win64
 ```
 
@@ -78,6 +84,7 @@ Platform outputs now land in:
 
 - `Bin/Win64`
 - `Bin/Win32`
+- `Bin/Linux64`
 
 Current coverage includes:
 

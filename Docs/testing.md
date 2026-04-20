@@ -7,6 +7,7 @@ Run the baseline regression suite with:
 ```bash
 ./test.sh Tests/TLuaTests.dpr Win64
 ./test.sh Tests/TLuaTests.dpr Win32
+./test.sh Tests/TLuaTests.dpr Linux64
 DELPHI_DEFINES=LUA_STATIC ./test.sh Tests/TLuaTests.dpr Win64
 ```
 
@@ -27,6 +28,7 @@ The `LUA_STATIC` variant validates the Win64 static-link path in `Source/LuaAPI.
 - alias surface for `LoadFromFile`, `ExecuteText`, and `ScriptText`
 - inherited class helpers, return propagation, and Lua-defined child methods
 - allocator-backed memory growth via `MemoryUsage`
+- direct `CopyTable` regression coverage including nested tables, shared references, and cycles
 - class blueprints with property access, method calls, and construction callback wiring
 
 ## Design

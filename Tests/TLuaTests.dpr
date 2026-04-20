@@ -1,12 +1,13 @@
 program TLuaTests;
 
 {$APPTYPE CONSOLE}
+{$I ../Source/LuaCompiler.inc}
 
 uses
-  System.IOUtils,
-  System.SysUtils,
-  System.Math,
-  System.Variants,
+  SysUtils,
+  Math,
+  Variants,
+  LuaTestCompat,
   Lua,
   LuaAPI;
 
@@ -27,6 +28,7 @@ type
     procedure OnScriptExecutionError(Name, Message: WideString; Code: Integer; LuaMessage: WideString); stdcall;
   end;
 
+type
   TLuaRegressionSuite = class
   private
     FAssertionCount: Integer;
@@ -57,6 +59,7 @@ type
     procedure TestLoadSource;
     procedure TestInheritance;
     procedure TestMemoryUsage;
+    procedure TestCopyTable;
     procedure TestClassBlueprintBinding;
   public
     procedure Run;
@@ -388,11 +391,11 @@ var
   MissingFile: string;
 begin
   LuaState := TLua.Create;
-  TempFile := TPath.Combine(TPath.GetTempPath, 'tlua-loadsource-test.lua');
-  MissingFile := TPath.Combine(TPath.GetTempPath, 'tlua-loadsource-missing.lua');
+  TempFile := TempFilePath('tlua-loadsource-test.lua');
+  MissingFile := TempFilePath('tlua-loadsource-missing.lua');
 
   try
-    TFile.WriteAllText(TempFile, 'loaded_value = 314');
+    WriteAllText(TempFile, 'loaded_value = 314');
 
     AssertTrue(LuaState.LoadFromFile(TempFile), 'LoadFromFile should accept an existing script file.');
     AssertEqual('tlua-loadsource-test.lua', LuaState.ScriptName, 'LoadSource should derive ScriptName from the file name.');
@@ -401,16 +404,16 @@ begin
     AssertTrue(LuaState.Execute, 'Loaded script should execute successfully.');
     AssertEqual(314, VarAsType(LuaState.Globals['loaded_value'], varInt64), 'Loaded script did not execute as expected.');
 
-    if TFile.Exists(MissingFile) then
-      TFile.Delete(MissingFile);
+    if FileExistsCompat(MissingFile) then
+      DeleteFileCompat(MissingFile);
 
     AssertTrue(not LuaState.LoadFromFile(MissingFile), 'LoadFromFile should fail for a missing file.');
     AssertEqual(LUA_ERRFILE, LuaState.LastErrorCode, 'Missing file should map to LUA_ERRFILE.');
     AssertEqual('Script file not found', LuaState.LastErrorMessage, 'Unexpected missing-file error message.');
     AssertTrue(Pos('tlua-loadsource-missing.lua', LuaState.LastErrorName) > 0, 'Missing file name should be preserved.');
   finally
-    if TFile.Exists(TempFile) then
-      TFile.Delete(TempFile);
+    if FileExistsCompat(TempFile) then
+      DeleteFileCompat(TempFile);
     LuaState.Free;
   end;
 end;
@@ -472,6 +475,64 @@ begin
   end;
 end;
 
+procedure TLuaRegressionSuite.TestCopyTable;
+var
+  LuaState: TLua;
+  SourceTable: Integer;
+  DestTable: Integer;
+  MetaTable: Integer;
+begin
+  LuaState := TLua.Create;
+  try
+    AssertTrue(
+      LuaState.ExecuteDirect(
+        'source = { value = 5, nested = { child = "base" } } ' +
+        'source.shared = source.nested ' +
+        'source.loop = source ' +
+        'source.__index = { lookup = "meta" } ' +
+        'source.__index.self = source.__index ' +
+        'dest = {} ' +
+        'meta = {}'
+      ),
+      'CopyTable setup script should execute successfully.'
+    );
+
+    SourceTable := LuaState.Stack.GetGlobal('source');
+    DestTable := LuaState.Stack.GetGlobal('dest');
+    MetaTable := LuaState.Stack.GetGlobal('meta');
+    try
+      LuaState.Stack.CopyTable(SourceTable, DestTable, MetaTable);
+    finally
+      LuaState.Stack.Pop(3);
+    end;
+
+    AssertTrue(
+      LuaState.ExecuteDirect(
+        'dest.nested.child = "copy" ' +
+        'meta.__index.lookup = "meta-copy" ' +
+        'copied_nested = dest.nested.child ' +
+        'source_nested = source.nested.child ' +
+        'copied_alias = dest.shared == dest.nested ' +
+        'copied_loop = dest.loop == dest ' +
+        'copied_meta = meta.__index.lookup ' +
+        'source_meta = source.__index.lookup ' +
+        'copied_meta_loop = meta.__index.self == meta.__index'
+      ),
+      'CopyTable verification script should execute successfully.'
+    );
+
+    AssertEqual('copy', VarToStr(LuaState.Globals['copied_nested']), 'Destination nested table should be writable.');
+    AssertEqual('base', VarToStr(LuaState.Globals['source_nested']), 'CopyTable should deep-copy nested tables.');
+    AssertEqual(True, VarAsType(LuaState.Globals['copied_alias'], varBoolean), 'CopyTable should preserve repeated table references.');
+    AssertEqual(True, VarAsType(LuaState.Globals['copied_loop'], varBoolean), 'CopyTable should preserve self-referential tables.');
+    AssertEqual('meta-copy', VarToStr(LuaState.Globals['copied_meta']), 'Meta table nested values should be writable after copy.');
+    AssertEqual('meta', VarToStr(LuaState.Globals['source_meta']), 'CopyTable should deep-copy nested meta tables.');
+    AssertEqual(True, VarAsType(LuaState.Globals['copied_meta_loop'], varBoolean), 'CopyTable should preserve cycles inside copied meta tables.');
+  finally
+    LuaState.Free;
+  end;
+end;
+
 procedure TLuaRegressionSuite.TestClassBlueprintBinding;
 var
   LuaState: TLua;
@@ -519,6 +580,7 @@ begin
   RunTest('LoadSource', TestLoadSource);
   RunTest('Inheritance', TestInheritance);
   RunTest('Memory usage', TestMemoryUsage);
+  RunTest('CopyTable', TestCopyTable);
   RunTest('Class blueprints', TestClassBlueprintBinding);
 
   Writeln(Format('[PASS] %d assertions', [FAssertionCount]));

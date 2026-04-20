@@ -95,7 +95,7 @@
 //    luaL_pushmodule, luaL_openlib, luaL_register
 
 
-{$IFDEF FPC}{$MODE OBJFPC}{$H+}{$ENDIF}
+{$I LuaCompiler.inc}
 
 unit LuaAPI;
 
@@ -173,11 +173,15 @@ type
 {$IFNDEF CPUX64}
    size_t = Cardinal;
 {$ELSE}
+  {$IFDEF FPC}
+   size_t = QWord;
+  {$ELSE}
   {$IF CompilerVersion < 18}
    size_t = Int64;
   {$ELSE}
    size_t = UInt64;
   {$IFEND}
+  {$ENDIF}
 {$IFEND}
 
    Psize_t = ^size_t;
@@ -575,7 +579,7 @@ procedure luaL_pushvariant(L: Plua_State; v: Variant);
 implementation
 
 uses
-  System.StrUtils, System.Variants, System.AnsiStrings, System.SysUtils
+  StrUtils, Variants, SysUtils
   {$IFDEF LUA_STATIC}, Winapi.Windows, LuaStaticWin64CrtImports{$ENDIF};
 
 {$IFDEF LUA_STATIC}
@@ -1195,50 +1199,94 @@ end;
 (* UTILITY FUNCTIONS *)
 (* ============================================================================ *)
 
-procedure luaL_copytable(L: Plua_State; s, d, m: Integer);
+function luaL_copytable_internal(L: Plua_State; s, d, m, visited: Integer): Boolean;
 var
-  i, t: Integer;
-  f: lua_CFunction;
+  t: Integer;
+  SourceValue: Integer;
+  ChildTable: Integer;
+  ChildMeta: Integer;
+  SourcePointer: Pointer;
 begin
+  Result := False;
+  s := lua_absindex(L, s);
+  d := lua_absindex(L, d);
+  m := lua_absindex(L, m);
+  visited := lua_absindex(L, visited);
+
   lua_pushnil(L);
 
   while (lua_next(L, s) <> 0) do
   begin
-    if lua_isstring(L, -2) then
+    if lua_isstring(L, -2) and AnsiStartsText('__', String(AnsiString(lua_tostring(L, -2)))) then
     begin
-      if AnsiStartsText('__', String(AnsiString(lua_tostring(L, -2)))) then
-        t:=m
-      else
-        t:=d;
+      t := m;
+      Result := True;
     end else
     begin
-      t:=d;
+      t := d;
     end;
 
     case lua_type(L, -1) of
-      LUA_TFUNCTION:
-      begin
-        f:=lua_tocfunction(L, -1);
-
-        lua_pushvalue(L, -2);
-        lua_pushcfunction(L, f);
-        lua_rawset(L, t);
-      end;
       LUA_TTABLE:
       begin
-        i:=lua_gettop(L);
-        luaL_copytable(L, i, d, m);
+        SourceValue := lua_absindex(L, -1);
+        SourcePointer := lua_topointer(L, SourceValue);
+
+        lua_rawgetp(L, visited, SourcePointer);
+        if lua_istable(L, -1) then
+        begin
+          lua_pushvalue(L, -3);
+          lua_pushvalue(L, -2);
+          lua_rawset(L, t);
+          lua_pop(L, 1);
+          lua_pop(L, 1);
+          Continue;
+        end;
+
+        lua_pop(L, 1);
+
+        lua_pushvalue(L, -2);
+        lua_newtable(L);
+        ChildTable := lua_absindex(L, -1);
+        lua_pushvalue(L, -1);
+        lua_rawsetp(L, visited, SourcePointer);
+        lua_newtable(L);
+        ChildMeta := lua_absindex(L, -1);
+
+        if luaL_copytable_internal(L, SourceValue, ChildTable, ChildMeta, visited) then
+          lua_setmetatable(L, ChildTable)
+        else
+          lua_pop(L, 1);
+
+        lua_rawset(L, t);
       end;
       else
       begin
+        // Copy functions and scalar values by reference so closures retain their
+        // captured upvalues and other Lua objects keep their identity.
         lua_pushvalue(L, -2);
-        lua_pushvalue(L, -1);
+        lua_pushvalue(L, -2);
         lua_rawset(L, t);
       end;
     end;
 
     lua_pop(L, 1);
   end;
+end;
+
+procedure luaL_copytable(L: Plua_State; s, d, m: Integer);
+var
+  Visited: Integer;
+begin
+  s := lua_absindex(L, s);
+  d := lua_absindex(L, d);
+
+  lua_newtable(L);
+  Visited := lua_absindex(L, -1);
+  lua_pushvalue(L, d);
+  lua_rawsetp(L, Visited, lua_topointer(L, s));
+  luaL_copytable_internal(L, s, d, m, Visited);
+  lua_pop(L, 1);
 end;
 
 function luaL_tovariant(L: Plua_State; idx: Integer): Variant;
@@ -1271,7 +1319,7 @@ begin
     end;
     LUA_TSTRING:
     begin
-      Result:=System.AnsiStrings.StrPas(lua_tostring(L, idx));
+      Result:=StrPas(lua_tostring(L, idx));
     end;
     LUA_TTABLE:
     begin

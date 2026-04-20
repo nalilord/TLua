@@ -34,10 +34,13 @@
 
 unit Lua;
 
+{$I LuaCompiler.inc}
+
 interface
 
 uses
-  Winapi.Windows, System.SysUtils, System.Variants, System.Classes, System.IniFiles, System.Generics.Collections, System.Contnrs, System.Types, LuaAPI;
+  SysUtils, Variants, Classes, IniFiles, Generics.Collections, Contnrs, Types,
+  LuaAPI, LuaCompat;
 
 const
   IID_ILuaErrorHandler = '{BE37CBD0-959E-4BC4-B874-C1F429A748D2}';
@@ -91,7 +94,7 @@ type
   TLuaCFunctionEvent = lua_CFunction;
 
   // Events
-  TLuaProcedure = reference to procedure(Sender: TLua; Args: TLuaArgs; Results: TLuaResults);
+  {$I LuaProcedureCompat.inc}
   TLuaFunctionEvent = procedure(Sender: TLua; Args: TLuaArgs; Results: TLuaResults);
   TLuaMethodEvent = procedure(Sender: TLua; Args: TLuaArgs; Results: TLuaResults) of object;
   TLuaClassConstructionEvent = procedure(Sender: TLua; Blueprint: TLuaClassBlueprint; Args: TLuaArgs; var UserClass: TObject; var Allow: Boolean) of object;
@@ -406,10 +409,10 @@ type
     FAllowConstruct: Boolean;
     FInstances: TObjectList<TLuaClass>;
     FInheritances: TObjectList<TLuaClassBlueprint>;
-    FLuaIndexHandler: TLuaCFunctionEvent;
-    FLuaGCHandler: TLuaCFunctionEvent;
-    FLuaCallHandler: TLuaCFunctionEvent;
-    FLuaNewHandler: TLuaCFunctionEvent;
+    FLuaIndexHandler: TLuaCallbackHandle;
+    FLuaGCHandler: TLuaCallbackHandle;
+    FLuaCallHandler: TLuaCallbackHandle;
+    FLuaNewHandler: TLuaCallbackHandle;
     FOnDefaultPropertyGet: TLuaClassDefaultPropertyEvent;
     FOnDefaultPropertySet: TLuaClassDefaultPropertyEvent;
     FOnConstruction: TLuaClassConstructionEvent;
@@ -487,8 +490,8 @@ type
     FProperties: THashedStringList;
     FIndexProperties: THashedStringList;
     FCleanupList: TObjectList;
-    FLuaReleaseHandler: TLuaCFunctionEvent;
-    FLuaInheritedHandler: TLuaCFunctionEvent;
+    FLuaReleaseHandler: TLuaCallbackHandle;
+    FLuaInheritedHandler: TLuaCallbackHandle;
     function GetMethods(Name: String): TLuaClassMethod;
     function GetProperties(Name: String): TLuaClassProperty;
     function GetIndexProperties(Name: String): TLuaClassIndexProperty;
@@ -518,7 +521,7 @@ type
       N: String;
       C: TLuaClass;
       case T: TLuaClassBlueprint.CallType of
-        mtNative: (E: TLuaClassMethodEvent; F: TLuaCFunctionEvent);
+        mtNative: (E: TLuaClassMethodEvent; F: TLuaCallbackHandle);
         mtLua: (R: Integer);
     end;
   private
@@ -550,7 +553,7 @@ type
   strict private type
     LibFunction = packed record
       N: String;
-      C: TLuaCFunctionEvent;
+      C: TLuaCallbackHandle;
     end;
     LibConstant = packed record
       N: String;
@@ -559,7 +562,7 @@ type
   private
     FLua: TLua;
     FName: String;
-    FLuaIndexHandler: TLuaCFunctionEvent;
+    FLuaIndexHandler: TLuaCallbackHandle;
     FFunctions: TList<LibFunction>;
     FConstants: Array of TList<LibConstant>;
   protected
@@ -719,7 +722,7 @@ type
     function PushBoolean(AValue: Boolean): Integer; inline;
     function PushString(AValue: String): Integer; inline;
     function PushPointer(AValue: Pointer): Integer; inline;
-    function PushFunction(AValue: TLuaCFunctionEvent): Integer; inline;
+    function PushFunction(AValue: TLuaCallbackHandle): Integer; inline;
     function PushVariant(AValue: Variant): Integer; inline;
     function PushValue(AIndex: Integer): Integer; inline;
     function IsNil(AIndex: Integer): Boolean; inline;
@@ -792,7 +795,7 @@ type
 implementation
 
 uses
-  Winapi.ActiveX, System.Math, System.AnsiStrings;
+  Math;
 
 { Helper }
 
@@ -808,7 +811,7 @@ type
   strict private
     FLuaRefIds: TList<LuaRefId>;
   strict protected
-    constructor Create; virtual; abstract;
+    constructor Create; virtual;
   protected
     procedure Initialize;
   public
@@ -845,14 +848,15 @@ type
     class var CallbackWrappers: TList<TLuaCallbackWrapper>;
     class var CallbackWrappersRelease: TList<TLuaCallbackWrapper>;
   strict private // Prevent showing class fields
-    FCallback: TLuaCFunctionEvent;
+    FThunk: TLuaCallbackThunk;
     FCallbackMethod: TLuaClassMethodCallback;
     FWrapperEvents: WrapperEvents;
-  strict protected // Hide, this is class internal stuff, do NOT touch
+  private // Hide, this is class internal stuff, do NOT touch
     class procedure AddWrapper(AWrapper: TLuaCallbackWrapper);
+    class function CallbackClosure(L: TLuaState): Integer; static; cdecl;
     constructor Create;
+    function GetCallback: TLuaCallbackHandle;
     function CallbackFunc(L: TLuaState): Integer; cdecl;
-  private // This is "public" for the unit
     class procedure Initialize;
     class procedure Finalize;
   public
@@ -865,215 +869,12 @@ type
     class function New(AClassMethod: TLuaClassMethod): TLuaCallbackWrapper; overload;
     class function New(AClassDefaultPropertyGet, AClassDefaultPropertySet: TLuaClassDefaultPropertyEvent): TLuaCallbackWrapper; overload;
     class function New(AClassIndexProperty: TLuaClassIndexProperty): TLuaCallbackWrapper; overload;
-    class procedure Release(ACallback: TLuaCFunctionEvent);
-    class procedure PrepareRelease(ACallback: TLuaCFunctionEvent);
+    class procedure Release(ACallback: TLuaCallbackHandle);
+    class procedure PrepareRelease(ACallback: TLuaCallbackHandle);
     class procedure CleanupRelease;
     destructor Destroy; override;
-    property Callback: TLuaCFunctionEvent read FCallback;
+    property Callback: TLuaCallbackHandle read GetCallback;
   end;
-
-{ Global }
-
-{$IFNDEF CPUX64}
-function MakeCdeclCallback(const Method: TMethod; StackSize: Shortint): Pointer;
-type
-  PCallbackPush = ^TCallbackPush;
-
-  TCallbackPush = packed record
-    // push dword ptr [esp+x]
-    PushParmOps: Array [0..2] of Byte;
-    PushParmVal: Shortint;
-  end;
-
-  PCallbackCall = ^TCallbackCall;
-
-  TCallbackCall = packed record
-    // push dword ptr [offset]
-    PushDataOps: Array [0..1] of Byte;
-    PushDataVal: Pointer;
-    // call [offset]
-    CallCodeOps: Array [0..1] of Byte;
-    CallCodeVal: Pointer;
-    // add esp,x
-    AddEspXXOps: Array [0..1] of Byte;
-    AddEspXXVal: Shortint;
-    // ret
-    Return: Byte;
-  end;
-var
-  Size: Shortint;
-  Loop: Shortint;
-  Buff: Pointer;
-begin
-  if (StackSize < 0) or // check for invalid parameter and Shortint overflow
-    (StackSize > High(Shortint) + 1 - 2 * SizeOf(Longword)) then
-  begin
-    Result := nil;
-    Exit;
-  end;
-  Result := VirtualAlloc(nil, $100, MEM_COMMIT, PAGE_EXECUTE_READWRITE);
-  if Assigned(Result) then
-  begin
-    try
-      Buff := Result;
-      if StackSize <= 0 then
-      begin
-        Size := 0;
-      end else
-      begin
-        // Copy parameters (used Longwords)
-        Size := ((StackSize - 1) div SizeOf(Longword) + 1) * SizeOf(Longword);
-        for Loop := 1 to Size div SizeOf(Longword) do
-        begin
-          with PCallbackPush(Buff)^ do
-          begin
-            PushParmOps[0] := $FF;
-            PushParmOps[1] := $74;
-            PushParmOps[2] := $24;
-            PushParmVal := Size;
-          end;
-          Inc(PCallbackPush(Buff));
-        end;
-      end;
-      with PCallbackCall(Buff)^ do
-      begin
-        // Push Self
-        PushDataOps[0] := $FF;
-        PushDataOps[1] := $35;
-        PushDataVal := Addr(Method.Data);
-        // Call Method
-        CallCodeOps[0] := $FF;
-        CallCodeOps[1] := $15;
-        CallCodeVal := Addr(Method.Code);
-        // Fix Stack
-        AddEspXXOps[0] := $83;
-        AddEspXXOps[1] := $C4;
-        AddEspXXVal := Size + SizeOf(Longword);
-        // Return
-        Return := $C3;
-      end;
-    except
-      VirtualFree(Result, 0, MEM_RELEASE);
-      Result := nil;
-    end;
-  end;
-end;
-
-procedure FreeCdeclCallback(Callback: Pointer);
-begin
-  if Assigned(Callback) then
-  begin
-    VirtualFree(Callback, 0, MEM_RELEASE);
-  end;
-end;
-{$ELSE}
-function MakeCallback(const Method: TMethod; NumArgs: Shortint): Pointer;
-const
-  RegParamCount = 4;
-  ShadowParamCount = 4;
-  Size32Bit = 4;
-  Size64Bit = 8;
-  ShadowStack   = ShadowParamCount * Size64Bit;
-  SkipParamCount = RegParamCount - ShadowParamCount;
-  StackSrsOffset = 3;
-  c64stack: Array[0..14] of Byte = (
-    $48, $81, $ec, 00, 00, 00, 00,              // sub rsp,$0
-    $4c, $89, $8c, $24, ShadowStack, 00, 00, 00 // mov [rsp+$20],r9
-  );
-  CopySrcOffset = 4;
-  CopyDstOffset = 4;
-  c64copy: Array[0..15] of Byte = (
-    $4c, $8b, $8c, $24,  00, 00, 00, 00, // mov r9,[rsp+0]
-    $4c, $89, $8c, $24, 00, 00, 00, 00   // mov [rsp+0],r9
-  );
-  RegMethodOffset = 10;
-  RegSelfOffset = 11;
-  c64regs: Array[0..28] of Byte = (
-    $4d, $89, $c1,                            // mov r9,r8
-    $49, $89, $d0,                            // mov r8,rdx
-    $48, $89, $ca,                            // mov rdx,rcx
-    $48, $b9, 00, 00, 00, 00, 00, 00, 00, 00, // mov rcx, Obj
-    $48, $b8, 00, 00, 00, 00, 00, 00, 00, 00  // mov rax, MethodPtr
-  );
-  c64jump: Array[0..2] of Byte = (
-    $48, $ff, $e0  // jump rax
-  );
-  CallOffset = 6;
-  c64call: Array[0..10] of Byte = (
-    $48, $ff, $d0,                 // call rax
-    $48, $81,$c4,  00, 00, 00, 00, // add rsp,$0
-    $c3                            // ret
-  );
-var
-  I, Count, Size, Offset: Integer;
-  Ptr, Ptr2, CallbackPtr: PByte;
-begin
-  Count:=SizeOf(c64regs);
-  if NumArgs >= RegParamCount then
-    Inc(Count, SizeOf(c64stack) + (NumArgs - RegParamCount) * SizeOf(c64copy) + SizeOf(c64call))
-  else
-    Inc(Count, SizeOf(c64jump));
-
-  CallbackPtr:=VirtualAlloc(nil, Count, MEM_COMMIT, PAGE_EXECUTE_READWRITE);
-  Ptr:=CallbackPtr;
-
-  Size:=0;
-  if NumArgs >= RegParamCount then
-  begin
-    Size:=( 1 + ((NumArgs + 1 - SkipParamCount) div 2) * 2 ) * Size64Bit;   // 16 byte stack align
-
-    Ptr2:=Ptr;
-    Move(c64stack, Ptr^, SizeOf(c64stack));
-    Inc(Ptr, StackSrsOffset);
-    Move(Size, Ptr^, Size32Bit);
-    Ptr:=Ptr2;
-    Inc(Ptr, SizeOf(c64stack));
-
-    for I:=0 to NumArgs - RegParamCount -1 do
-    begin
-      Ptr2:=Ptr;
-      Move(c64copy, Ptr^, SizeOf(c64copy));
-      Inc(Ptr, CopySrcOffset);
-      Offset:=Size + (I + ShadowParamCount + 1) * Size64Bit;
-      Move(Offset, Ptr^, Size32Bit);
-      Inc(Ptr, CopyDstOffset + Size32Bit);
-      Offset:=(I + ShadowParamCount + 1) * Size64Bit;
-      Move(Offset, Ptr^, Size32Bit);
-      Ptr:=Ptr2;
-      Inc(Ptr, SizeOf(c64copy));
-    end;
-  end;
-
-  Ptr2:=Ptr;
-  Move(c64regs, Ptr^, SizeOf(c64regs));
-  Inc(Ptr, RegSelfOffset);
-  Move(Method.Data, Ptr^, SizeOf(Method.Data));
-  Inc(Ptr, RegMethodOffset);
-  Move(Method.Code, Ptr^, SizeOf(Method.Code));
-  Ptr:=Ptr2;
-  Inc(Ptr, SizeOf(c64regs));
-
-  if NumArgs < RegParamCount then
-  begin
-    Move(c64jump, Ptr^, SizeOf(c64jump))
-  end else
-  begin
-    Move(c64call, Ptr^, SizeOf(c64call));
-    Inc(Ptr, CallOffset);
-    Move(Size, Ptr^, Size32Bit);
-  end;
-
-  Result:=CallbackPtr;
-end;
-
-procedure FreeCallback(Callback: Pointer);
-begin
-  if Assigned(Callback) then
-  begin
-    VirtualFree(Callback, 0, MEM_RELEASE);
-  end;
-end;
-{$ENDIF}
 
 function LuaDefaultAllocator(ud, ptr: Pointer; osize, nsize: size_t): Pointer; cdecl;
 var
@@ -1176,12 +977,17 @@ begin
   inherited;
 end;
 
+constructor TLuaInternalCore.Create;
+begin
+  inherited Create;
+end;
+
 class function TLuaInternalCore.GetInstance: TLuaInternalCore;
 begin
   try
     if NOT Assigned(InternalCore) then
     begin
-      InternalCore:=inherited Create;
+      InternalCore:=TLuaInternalCore.Create;
       InternalCore.Initialize;
     end;
   finally
@@ -1196,31 +1002,47 @@ begin
   inherited Create;
 
   FCallbackMethod:=CallbackFunc;
-
-  {$IFNDEF CPUX64}
-  FCallback:=lua_CFunction(MakeCdeclCallback(TMethod(FCallbackMethod), SizeOf(NativeInt)));
-  {$ELSE}
-  FCallback:=lua_CFunction(MakeCallback(TMethod(FCallbackMethod), 1));
-  {$ENDIF}
+  FThunk:=TLuaCallbackThunk.Create(Self, TMethod(FCallbackMethod), 1);
 
   TLuaCallbackWrapper.CallbackWrappers.Add(Self);
 end;
 
 destructor TLuaCallbackWrapper.Destroy;
 begin
+  if Assigned(TLuaCallbackWrapper.CallbackWrappers) then
+  begin
+    TLuaCallbackWrapper.CallbackWrappers.Remove(Self);
+  end;
+
+  if Assigned(TLuaCallbackWrapper.CallbackWrappersRelease) then
+  begin
+    TLuaCallbackWrapper.CallbackWrappersRelease.Remove(Self);
+  end;
+
   if FWrapperEvents.Event = lceProcedure then
   begin
     System.Finalize(FWrapperEvents.Proc^);
     FreeMemory(FWrapperEvents.Proc);
   end;
-
-  {$IFNDEF CPUX64}
-  FreeCdeclCallback(@FCallback);
-  {$ELSE}
-  FreeCallback(@FCallback);
-  {$ENDIF}
+  FreeAndNil(FThunk);
 
   inherited;
+end;
+
+class function TLuaCallbackWrapper.CallbackClosure(L: TLuaState): Integer;
+var
+  Wrapper: TLuaCallbackWrapper;
+begin
+  Wrapper:=TLuaCallbackWrapper(lua_touserdata(L, lua_upvalueindex(1)));
+  if Assigned(Wrapper) then
+    Result:=Wrapper.CallbackFunc(L)
+  else
+    Result:=0;
+end;
+
+function TLuaCallbackWrapper.GetCallback: TLuaCallbackHandle;
+begin
+  Result:=FThunk.Handle;
 end;
 
 class procedure TLuaCallbackWrapper.Initialize;
@@ -1317,13 +1139,13 @@ begin
   end;
 end;
 
-class procedure TLuaCallbackWrapper.PrepareRelease(ACallback: TLuaCFunctionEvent);
+class procedure TLuaCallbackWrapper.PrepareRelease(ACallback: TLuaCallbackHandle);
 var
   I: Integer;
 begin
   for I:=0 to CallbackWrappers.Count - 1 do
   begin
-    if @CallbackWrappers[I].Callback = @ACallback then
+    if CallbackWrappers[I].Callback = ACallback then
     begin
       CallbackWrappersRelease.Add(CallbackWrappers[I]);
       CallbackWrappers.Delete(I);
@@ -1352,20 +1174,15 @@ begin
   end;
 end;
 
-class procedure TLuaCallbackWrapper.Release(ACallback: TLuaCFunctionEvent);
+class procedure TLuaCallbackWrapper.Release(ACallback: TLuaCallbackHandle);
 var
   I: Integer;
 begin
   for I:=0 to CallbackWrappers.Count - 1 do
   begin
-    if @CallbackWrappers[I].Callback = @ACallback then
+    if CallbackWrappers[I].Callback = ACallback then
     begin
-      try
-        CallbackWrappers[I].Free;
-      finally
-        CallbackWrappers.Delete(I);
-      end;
-
+      CallbackWrappers[I].Free;
       Break;
     end;
   end;
@@ -1657,14 +1474,15 @@ begin
 end;
 
 class procedure TLuaCallbackWrapper.CleanupRelease;
-var
-  I: Integer;
 begin
   try
-    for I:=0 to CallbackWrappersRelease.Count - 1 do
-    try
-      CallbackWrappersRelease[I].Free;
-    except
+    while CallbackWrappersRelease.Count > 0 do
+    begin
+      try
+        CallbackWrappersRelease[0].Free;
+      except
+        CallbackWrappersRelease.Delete(0);
+      end;
     end;
   finally
     CallbackWrappersRelease.Clear;
@@ -1794,7 +1612,7 @@ end;
 
 function TLuaObject.GetTypName: String;
 begin
-  Result:=String(System.AnsiStrings.StrPas(lua_typename(FLua.State, FTyp)));
+  Result:=String(StrPas(lua_typename(FLua.State, FTyp)));
 end;
 
 procedure TLuaObject.Initialize;
@@ -2616,14 +2434,14 @@ end;
 
 procedure TLuaTable.BeginUpdate;
 begin
-  AtomicIncrement(FUpdating);
+  TLuaPlatform.AtomicIncrement(FUpdating);
 end;
 
 procedure TLuaTable.EndUpdate;
 begin
   if FUpdating > 0 then
   begin
-    AtomicDecrement(FUpdating);
+    TLuaPlatform.AtomicDecrement(FUpdating);
     if FUpdating = 0 then
     begin
       Iterate;
@@ -3205,16 +3023,25 @@ end;
 
 procedure TLuaClassBlueprint.Finalize;
 var
-  I: Integer;
+  Blueprint: TLuaClassBlueprint;
+  Instance: TLuaClass;
 begin
-  for I:=0 to FInheritances.Count - 1 do
-    FInheritances[I].Free;
+  while FInheritances.Count > 0 do
+  begin
+    Blueprint := FInheritances.Last;
+    FInheritances.Extract(Blueprint);
+    Blueprint.Free;
+  end;
 
   FInheritances.OwnsObjects:=False;
   FInheritances.Clear;
 
-  for I:=0 to FInstances.Count - 1 do
-    FInstances[I].Free;
+  while FInstances.Count > 0 do
+  begin
+    Instance := FInstances.Last;
+    FInstances.Extract(Instance);
+    Instance.Free;
+  end;
 
   FInstances.OwnsObjects:=False;
   FInstances.Clear;
@@ -3256,7 +3083,7 @@ begin
     lua_rawget(AState, 1);
     if lua_isstring(AState, -1) then
     begin
-      Name:=System.AnsiStrings.StrPas(lua_tostring(AState, -1));
+      Name:=StrPas(lua_tostring(AState, -1));
     end;
     lua_pop(AState, 1);
 
@@ -3395,16 +3222,8 @@ end;
 function TLuaClassBlueprint.Inherit(AName: String = ''): TLuaClassBlueprint;
 
   function CreateUID: String;
-  var
-    GUID: TGUID;
-    StrUID: String;
   begin
-    StrUID:=StringOfChar('0', SizeOf(TGUID) * 2);
-
-    if CoCreateGuid(GUID) = S_OK then
-      BinToHex(@GUID, PChar(StrUID), SizeOf(GUID));
-
-    Result:=AnsiUpperCase(StrUID);
+    Result:=TLuaPlatform.CreateGuidHex;
   end;
 
 
@@ -4411,9 +4230,9 @@ var
 begin
   Result:=0;
 
-  for I:=0 to AName.Length - 1 do
+  for I:=1 to Length(AName) do
   begin
-    Result:=((Result SHL 2) OR (Result SHR (SizeOf(Result) * 8 - 2))) XOR Ord(AName.Chars[I]);
+    Result:=((Result SHL 2) OR (Result SHR (SizeOf(Result) * 8 - 2))) XOR Ord(AName[I]);
   end;
 end;
 
@@ -4548,7 +4367,7 @@ begin
   FClassInheritor:=TLuaClassInheritor.Create(Self);
   FClassBlueprints:=TObjectList<TLuaClassBlueprint>.Create;
   FErrorHandlers:=TInterfaceList.Create;
-  FFunctions:=THashedStringList.Create(dupError, True, False);
+  FFunctions:=TLuaPlatform.NewHashedStringList(dupError, False);
   ClearLastError;
 
   // Create lua state and open default libs
@@ -4761,7 +4580,7 @@ begin
       begin
         E.FName:=ContextName;
         E.FCode:=Res;
-        E.FLuaMessage:=String(System.AnsiStrings.StrPas(lua_tostring(State, -1)));
+        E.FLuaMessage:=String(StrPas(lua_tostring(State, -1)));
 
         HandleLuaError(E);
 
@@ -4977,7 +4796,8 @@ var
 begin
   Wrapper:=TLuaCallbackWrapper.New(AFunc);
   try
-    lua_register(FState, PAnsiChar(AnsiString(AName)), Wrapper.Callback);
+    FStack.PushFunction(Wrapper.Callback);
+    FStack.SetGlobal(AName);
   finally
     FCleanupList.Add(Wrapper);
   end;
@@ -4989,7 +4809,8 @@ var
 begin
   Wrapper:=TLuaCallbackWrapper.New(AMethod);
   try
-    lua_register(FState, PAnsiChar(AnsiString(AName)), Wrapper.Callback);
+    FStack.PushFunction(Wrapper.Callback);
+    FStack.SetGlobal(AName);
   finally
     FCleanupList.Add(Wrapper);
   end;
@@ -5001,7 +4822,8 @@ var
 begin
   Wrapper:=TLuaCallbackWrapper.New(AProc);
   try
-    lua_register(FState, PAnsiChar(AnsiString(AName)), Wrapper.Callback);
+    FStack.PushFunction(Wrapper.Callback);
+    FStack.SetGlobal(AName);
   finally
     FCleanupList.Add(Wrapper);
   end;
@@ -5223,7 +5045,7 @@ begin
       E:=Ex;
       E.FName:=ContextName;
       E.FCode:=Res;
-      E.FLuaMessage:=String(System.AnsiStrings.StrPas(lua_tostring(FThread, -1)));
+      E.FLuaMessage:=String(StrPas(lua_tostring(FThread, -1)));
 
       FLastErrorCode:=E.Code;
       FLastErrorName:=E.Name;
@@ -5352,10 +5174,10 @@ begin
   begin
     if lua_type(FState, I) IN [LUA_TNIL, LUA_TBOOLEAN, LUA_TNUMBER, LUA_TSTRING] then
     begin
-      OutputDebugString(PChar(String(IntToStr(I) + '# (' + LUA_TYPES[lua_type(FState, I)] + '): ' + VarToStrDef(luaL_tovariant(FState, I), ''))));
+      TLuaPlatform.DebugOut(String(IntToStr(I) + '# (' + LUA_TYPES[lua_type(FState, I)] + '): ' + VarToStrDef(luaL_tovariant(FState, I), '')));
     end else
     begin
-      OutputDebugString(PChar(String(IntToStr(I) + '# (' + LUA_TYPES[lua_type(FState, I)] + '): <can not dump>')));
+      TLuaPlatform.DebugOut(String(IntToStr(I) + '# (' + LUA_TYPES[lua_type(FState, I)] + '): <can not dump>'));
     end;
   end;
 end;
@@ -5382,9 +5204,9 @@ begin
   Result:=lua_gettop(FState);
 end;
 
-function TLuaStack.PushFunction(AValue: TLuaCFunctionEvent): Integer;
+function TLuaStack.PushFunction(AValue: TLuaCallbackHandle): Integer;
 begin
-  lua_pushcfunction(FState, AValue);
+  TLuaPlatform.PushCallback(FState, AValue, TLuaCallbackWrapper.CallbackClosure);
   Result:=lua_gettop(FState);
 end;
 
@@ -5508,7 +5330,7 @@ end;
 
 function TLuaStack.ToString(AIndex: Integer): String;
 begin
-  Result:=String(System.AnsiStrings.StrPas(lua_tostring(FState, AIndex)));
+  Result:=String(StrPas(lua_tostring(FState, AIndex)));
 end;
 
 function TLuaStack.ToThread(AIndex: Integer): TLuaState;
@@ -5538,7 +5360,7 @@ end;
 
 function TLuaStack.TypName(AIndex: Integer): String;
 begin
-  Result:=String(System.AnsiStrings.StrPas(lua_typename(FState, Typ(AIndex))));
+  Result:=String(StrPas(lua_typename(FState, Typ(AIndex))));
 end;
 
 procedure TLuaStack.UnRef(ATable, ARefId: Integer);
