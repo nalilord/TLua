@@ -1,7 +1,10 @@
 program TLuaTests;
 
 {$APPTYPE CONSOLE}
-{$I ../Source/LuaCompiler.inc}
+{$IFDEF FPC}
+  {$MODE DELPHIUNICODE}
+  {$H+}
+{$ENDIF}
 
 uses
   SysUtils,
@@ -44,6 +47,7 @@ type
     procedure SumFunction(Sender: TLua; Args: TLuaArgs; Results: TLuaResults);
     procedure LibraryJoin(Sender: TLua; Args: TLuaArgs; Results: TLuaResults);
     procedure LibraryJoinReplacement(Sender: TLua; Args: TLuaArgs; Results: TLuaResults);
+    procedure InvokeAttachFromArgs(Sender: TLua; Args: TLuaArgs; Results: TLuaResults);
     procedure BaseSpeak(Sender: TLua; Clazz: TLuaClass; Method: TLuaClassMethod; Args: TLuaArgs; Results: TLuaResults);
     procedure GreeterConstruct(Sender: TLua; Blueprint: TLuaClassBlueprint; Args: TLuaArgs; var UserClass: TObject; var Allow: Boolean);
     procedure GreeterDescribe(Sender: TLua; Clazz: TLuaClass; Method: TLuaClassMethod; Args: TLuaArgs; Results: TLuaResults);
@@ -58,6 +62,7 @@ type
     procedure TestErrorHandling;
     procedure TestLoadSource;
     procedure TestInheritance;
+    procedure TestCallbackArgTableInvoke;
     procedure TestMemoryUsage;
     procedure TestCopyTable;
     procedure TestClassBlueprintBinding;
@@ -68,25 +73,25 @@ type
 procedure TErrorHandler.OnScriptLoadError(Name, Message: WideString; Code: Integer; LuaMessage: WideString);
 begin
   Inc(LoadCount);
-  LastName := Name;
-  LastMessage := Message;
-  LastCode := Code;
-  LastLuaMessage := LuaMessage;
+  LastName:=Name;
+  LastMessage:=Message;
+  LastCode:=Code;
+  LastLuaMessage:=LuaMessage;
 end;
 
 procedure TErrorHandler.OnScriptExecutionError(Name, Message: WideString; Code: Integer; LuaMessage: WideString);
 begin
   Inc(ExecutionCount);
-  LastName := Name;
-  LastMessage := Message;
-  LastCode := Code;
-  LastLuaMessage := LuaMessage;
+  LastName:=Name;
+  LastMessage:=Message;
+  LastCode:=Code;
+  LastLuaMessage:=LuaMessage;
 end;
 
 procedure TLuaRegressionSuite.AssertTrue(ACondition: Boolean; const AMessage: string);
 begin
   Inc(FAssertionCount);
-  if not ACondition then
+  if NOT ACondition then
     raise ETestFailure.Create(AMessage);
 end;
 
@@ -144,6 +149,23 @@ begin
   Results.PushStr(UpperCase(Args[0].AsStr) + '|' + UpperCase(Args[1].AsStr));
 end;
 
+procedure TLuaRegressionSuite.InvokeAttachFromArgs(Sender: TLua; Args: TLuaArgs; Results: TLuaResults);
+var
+  Invoker: TLuaClassMethodInvoker;
+begin
+  Invoker:=nil;
+  AssertTrue(Args.Check([ltClass, ltClass, ltTable]), 'invoke_attach should receive class, class, table.');
+  AssertTrue(Args[0].AsClass.TryInvoke('onAttach', Invoker), 'onAttach should resolve from callback target class.');
+  try
+    Invoker.Args.PushClass(Args[1].AsClass);
+    Invoker.Args.PushStr('runtime_state');
+    Invoker.Args.PushValue(Args[2]);
+    Results.PushBool(Invoker.Execute);
+  finally
+    Invoker.Free;
+  end;
+end;
+
 procedure TLuaRegressionSuite.BaseSpeak(Sender: TLua; Clazz: TLuaClass; Method: TLuaClassMethod; Args: TLuaArgs; Results: TLuaResults);
 begin
   Inc(FBaseSpeakCount);
@@ -152,7 +174,7 @@ end;
 
 procedure TLuaRegressionSuite.GreeterConstruct(Sender: TLua; Blueprint: TLuaClassBlueprint; Args: TLuaArgs; var UserClass: TObject; var Allow: Boolean);
 begin
-  FConstructed := True;
+  FConstructed:=True;
 end;
 
 procedure TLuaRegressionSuite.GreeterDescribe(Sender: TLua; Clazz: TLuaClass; Method: TLuaClassMethod; Args: TLuaArgs; Results: TLuaResults);
@@ -162,21 +184,21 @@ end;
 
 procedure TLuaRegressionSuite.GreeterNameGet(Sender: TLua; Clazz: TLuaClass; Prop: TLuaClassProperty; Value: TLuaValue);
 begin
-  Value.AsStr := FStoredName;
+  Value.AsStr:=FStoredName;
 end;
 
 procedure TLuaRegressionSuite.GreeterNameSet(Sender: TLua; Clazz: TLuaClass; Prop: TLuaClassProperty; Value: TLuaValue);
 begin
-  FStoredName := Value.AsStr;
+  FStoredName:=Value.AsStr;
 end;
 
 procedure TLuaRegressionSuite.TestGlobalsAndExecuteDirect;
 var
   LuaState: TLua;
 begin
-  LuaState := TLua.Create;
+  LuaState:=TLua.Create;
   try
-    LuaState.Globals['answer'] := 41;
+    LuaState.Globals['answer']:=41;
     AssertEqual(41, VarAsType(LuaState.Globals['answer'], varInt64), 'Initial global round-trip failed.');
 
     AssertTrue(
@@ -194,7 +216,7 @@ procedure TLuaRegressionSuite.TestRegisteredFunction;
 var
   LuaState: TLua;
 begin
-  LuaState := TLua.Create;
+  LuaState:=TLua.Create;
   try
     LuaState.RegisterMethod('sum', SumFunction);
 
@@ -218,7 +240,7 @@ var
   LuaState: TLua;
   Func: TLuaFunction;
 begin
-  LuaState := TLua.Create;
+  LuaState:=TLua.Create;
   try
     AssertTrue(
       LuaState.ExecuteDirect('function greet(name) return true, "Hello, " .. name end'),
@@ -226,9 +248,9 @@ begin
     );
 
     AssertTrue(LuaState.IntroduceFunction('greet'), 'First IntroduceFunction call should succeed.');
-    AssertTrue(not LuaState.IntroduceFunction('greet'), 'Second IntroduceFunction call should report the cached function.');
+    AssertTrue(NOT LuaState.IntroduceFunction('greet'), 'Second IntroduceFunction call should report the cached function.');
 
-    Func := LuaState.Functions['greet'];
+    Func:=LuaState.Functions['greet'];
     AssertTrue(Assigned(Func), 'Introduced function should be accessible through TLua.Functions.');
 
     Func.Args.Clear;
@@ -247,9 +269,9 @@ var
   LuaState: TLua;
   Table: TLuaTable;
 begin
-  LuaState := TLua.Create;
+  LuaState:=TLua.Create;
   try
-    Table := LuaState.NewTable('settings');
+    Table:=LuaState.NewTable('settings');
     try
       Table.Add('name', 'TLua');
       Table.Add('enabled', True);
@@ -258,7 +280,7 @@ begin
       Table.Free;
     end;
 
-    Table := LuaState.Tables['settings'];
+    Table:=LuaState.Tables['settings'];
     try
       AssertTrue(Assigned(Table), 'Expected to retrieve the table from globals.');
       AssertEqual('TLua', Table.AsStr['name'], 'Unexpected string value in table.');
@@ -277,9 +299,9 @@ var
   LuaState: TLua;
   Lib: TLuaLibrary;
 begin
-  LuaState := TLua.Create;
+  LuaState:=TLua.Create;
   try
-    Lib := LuaState.NewLibrary('cfg');
+    Lib:=LuaState.NewLibrary('cfg');
     Lib.AddConstant('MODE', 'test');
     Lib.AddConstant('MODE', 'prod');
     Lib.AddConstant('RETRIES', 2);
@@ -309,9 +331,9 @@ var
   LuaState: TLua;
   Thread: TLuaThread;
 begin
-  LuaState := TLua.Create;
+  LuaState:=TLua.Create;
   try
-    Thread := LuaState.NewThread;
+    Thread:=LuaState.NewThread;
     try
       AssertTrue(
         Thread.Execute('thread_answer = 6 * 7'),
@@ -329,7 +351,7 @@ begin
       AssertEqual(0, Thread.Stack.Top, 'Thread stack should be clear after returned values are discarded.');
 
       AssertTrue(
-        not Thread.Execute('error("thread-fail")'),
+        NOT Thread.Execute('error("thread-fail")'),
         'Thread runtime error should be reported as failure.'
       );
 
@@ -354,28 +376,28 @@ var
   LuaState: TLua;
   Handler: TErrorHandler;
 begin
-  LuaState := TLua.Create;
-  Handler := TErrorHandler.Create;
+  LuaState:=TLua.Create;
+  Handler:=TErrorHandler.Create;
   try
-    LuaState.ScriptName := 'ErrorSuite';
+    LuaState.ScriptName:='ErrorSuite';
     LuaState.RegisterErrorHandler(Handler);
 
-    LuaState.ScriptText := 'function broken(';
-    AssertTrue(not LuaState.Execute, 'Invalid source should fail during load.');
+    LuaState.ScriptText:='function broken(';
+    AssertTrue(NOT LuaState.Execute, 'Invalid source should fail during load.');
     AssertEqual(1, Handler.LoadCount, 'Load error handler should be called once.');
     AssertEqual('ErrorSuite', LuaState.LastErrorName, 'Last error name should reflect the script context.');
     AssertEqual('Syntax error during precompilation', LuaState.LastErrorMessage, 'Unexpected load error category.');
     AssertTrue(LuaState.LastErrorCode <> LUA_OK, 'Load error code should be set.');
     AssertTrue(LuaState.LastErrorLuaMessage <> '', 'Load error should preserve the Lua message.');
 
-    AssertTrue(not LuaState.ExecuteText('error("direct-fail")'), 'ExecuteText runtime error should fail.');
+    AssertTrue(NOT LuaState.ExecuteText('error("direct-fail")'), 'ExecuteText runtime error should fail.');
     AssertEqual(1, Handler.ExecutionCount, 'ExecuteDirect should notify the execution error handler.');
     AssertEqual('ErrorSuite', LuaState.LastErrorName, 'ExecuteDirect should reuse the script name when present.');
     AssertEqual('Runtime error', LuaState.LastErrorMessage, 'Unexpected direct execution error category.');
     AssertTrue(Pos('direct-fail', LuaState.LastErrorLuaMessage) > 0, 'Direct execution Lua error text was not preserved.');
 
-    LuaState.ScriptText := 'error("execute-fail")';
-    AssertTrue(not LuaState.Execute, 'Runtime source should fail during execution.');
+    LuaState.ScriptText:='error("execute-fail")';
+    AssertTrue(NOT LuaState.Execute, 'Runtime source should fail during execution.');
     AssertEqual(2, Handler.ExecutionCount, 'Script execution errors should be tracked separately from load errors.');
     AssertTrue(Pos('execute-fail', Handler.LastLuaMessage) > 0, 'Error handler should receive the Lua execution message.');
   finally
@@ -390,9 +412,9 @@ var
   TempFile: string;
   MissingFile: string;
 begin
-  LuaState := TLua.Create;
-  TempFile := TempFilePath('tlua-loadsource-test.lua');
-  MissingFile := TempFilePath('tlua-loadsource-missing.lua');
+  LuaState:=TLua.Create;
+  TempFile:=TempFilePath('tlua-loadsource-test.lua');
+  MissingFile:=TempFilePath('tlua-loadsource-missing.lua');
 
   try
     WriteAllText(TempFile, 'loaded_value = 314');
@@ -407,7 +429,7 @@ begin
     if FileExistsCompat(MissingFile) then
       DeleteFileCompat(MissingFile);
 
-    AssertTrue(not LuaState.LoadFromFile(MissingFile), 'LoadFromFile should fail for a missing file.');
+    AssertTrue(NOT LuaState.LoadFromFile(MissingFile), 'LoadFromFile should fail for a missing file.');
     AssertEqual(LUA_ERRFILE, LuaState.LastErrorCode, 'Missing file should map to LUA_ERRFILE.');
     AssertEqual('Script file not found', LuaState.LastErrorMessage, 'Unexpected missing-file error message.');
     AssertTrue(Pos('tlua-loadsource-missing.lua', LuaState.LastErrorName) > 0, 'Missing file name should be preserved.');
@@ -422,17 +444,22 @@ procedure TLuaRegressionSuite.TestInheritance;
 var
   LuaState: TLua;
   Blueprint: TLuaClassBlueprint;
+  ChildBlueprint: TLuaClassBlueprint;
+  ChildInstance: TLuaClass;
+  Invoker: TLuaClassMethodInvoker;
+  MethodType: TLuaCallType;
 begin
-  LuaState := TLua.Create;
+  LuaState:=TLua.Create;
   try
-    FBaseSpeakCount := 0;
-    Blueprint := LuaState.NewClass('BaseGreeter');
+    FBaseSpeakCount:=0;
+    Blueprint:=LuaState.NewClass('BaseGreeter');
     Blueprint.AddMethod('speak', BaseSpeak);
     Blueprint.Register;
+    ChildBlueprint:=Blueprint.Inherit('ChildGreeter');
+    ChildBlueprint.Register;
 
     AssertTrue(
       LuaState.ExecuteDirect(
-        'ChildGreeter = class(BaseGreeter) ' +
         'function ChildGreeter:speak() ' +
         '  local explicit = inherited(self, "speak") ' +
         '  local implicit = self:inherited("speak") ' +
@@ -447,6 +474,89 @@ begin
 
     AssertEqual('base|base', VarToStr(LuaState.Globals['inherit_message']), 'Inherited helper calls should return the parent result.');
     AssertEqual(2, FBaseSpeakCount, 'Both inherited helper forms should invoke the parent method.');
+
+    ChildInstance:=ChildBlueprint.Construct;
+    try
+      AssertTrue(Assigned(ChildInstance), 'Native code should be able to construct the Lua child blueprint.');
+      AssertTrue(ChildInstance.HasMethod('speak'), 'HasMethod should report Lua-defined child methods.');
+      AssertTrue(ChildInstance.HasLuaMethod('speak'), 'HasLuaMethod should report Lua-defined child methods.');
+      AssertTrue(NOT ChildInstance.HasNativeMethod('speak'), 'HasNativeMethod should stay false for Lua-defined child methods.');
+      AssertTrue(ChildInstance.TryGetMethodType('speak', MethodType), 'TryGetMethodType should resolve Lua-defined child methods.');
+      AssertTrue(MethodType = mtLua, 'Lua-defined child methods should report mtLua.');
+      AssertTrue(NOT ChildInstance.TryGetMethodType('missing', MethodType), 'TryGetMethodType should fail for unknown methods.');
+      AssertTrue(ChildInstance.Methods['speak'] = nil, 'Methods[] should remain native-only for compatibility.');
+      AssertTrue(ChildInstance.TryInvoke('speak', Invoker), 'TryInvoke should resolve Lua-defined child methods.');
+      try
+        AssertTrue(Invoker.Execute, 'Lua-defined child method invoker should execute successfully.');
+        AssertTrue(Invoker.Results.Count > 0, 'Lua-defined child method should return a result.');
+        AssertEqual('base|base', Invoker.Results[0].AsStr, 'Native invocation of Lua-defined child method returned the wrong result.');
+      finally
+        Invoker.Free;
+      end;
+    finally
+      ChildInstance.Free;
+    end;
+  finally
+    LuaState.Free;
+  end;
+end;
+
+procedure TLuaRegressionSuite.TestCallbackArgTableInvoke;
+var
+  LuaState: TLua;
+  BaseBlueprint: TLuaClassBlueprint;
+  EntityBlueprint: TLuaClassBlueprint;
+  ExecuteOk: Boolean;
+begin
+  LuaState:=TLua.Create;
+  try
+    BaseBlueprint:=LuaState.NewClass('BaseComponent');
+    BaseBlueprint.Register;
+
+    EntityBlueprint:=LuaState.NewClass('EntityProxy');
+    EntityBlueprint.Register;
+
+    LuaState.RegisterMethod('invoke_attach', InvokeAttachFromArgs);
+
+    ExecuteOk:=LuaState.ExecuteDirect(
+      'RuntimeState = class(BaseComponent) ' +
+      'function RuntimeState:onAttach(entity, name, props) ' +
+      '  callback_attached_name = name ' +
+      '  callback_attached_label = props.label ' +
+      'end ' +
+      'local instance = RuntimeState:new() ' +
+      'local entity = EntityProxy:new() ' +
+      'callback_ok = invoke_attach(instance, entity, { label = "player_hp" })'
+    );
+
+    AssertTrue(
+      ExecuteOk,
+      Format(
+        'Callback arg-table invoke should execute successfully. code=%d name="%s" message="%s" lua="%s"',
+        [
+          LuaState.LastErrorCode,
+          LuaState.LastErrorName,
+          LuaState.LastErrorMessage,
+          LuaState.LastErrorLuaMessage
+        ]
+      )
+    );
+
+    AssertEqual(
+      True,
+      VarAsType(LuaState.Globals['callback_ok'], varBoolean),
+      'Callback arg-table invoke should report success.'
+    );
+    AssertEqual(
+      'runtime_state',
+      VarToStr(LuaState.Globals['callback_attached_name']),
+      'Forwarded string argument should reach onAttach.'
+    );
+    AssertEqual(
+      'player_hp',
+      VarToStr(LuaState.Globals['callback_attached_label']),
+      'Forwarded callback table should reach onAttach.'
+    );
   finally
     LuaState.Free;
   end;
@@ -458,9 +568,9 @@ var
   BeforeUsage: NativeInt;
   AfterUsage: NativeInt;
 begin
-  LuaState := TLua.Create;
+  LuaState:=TLua.Create;
   try
-    BeforeUsage := LuaState.MemoryUsage;
+    BeforeUsage:=LuaState.MemoryUsage;
     AssertTrue(BeforeUsage > 0, 'Lua allocator should report memory usage after state initialization.');
 
     AssertTrue(
@@ -468,7 +578,7 @@ begin
       'Memory usage setup script should succeed.'
     );
 
-    AfterUsage := LuaState.MemoryUsage;
+    AfterUsage:=LuaState.MemoryUsage;
     AssertTrue(AfterUsage > BeforeUsage, 'MemoryUsage should increase after retaining a large Lua string.');
   finally
     LuaState.Free;
@@ -482,7 +592,7 @@ var
   DestTable: Integer;
   MetaTable: Integer;
 begin
-  LuaState := TLua.Create;
+  LuaState:=TLua.Create;
   try
     AssertTrue(
       LuaState.ExecuteDirect(
@@ -497,9 +607,9 @@ begin
       'CopyTable setup script should execute successfully.'
     );
 
-    SourceTable := LuaState.Stack.GetGlobal('source');
-    DestTable := LuaState.Stack.GetGlobal('dest');
-    MetaTable := LuaState.Stack.GetGlobal('meta');
+    SourceTable:=LuaState.Stack.GetGlobal('source');
+    DestTable:=LuaState.Stack.GetGlobal('dest');
+    MetaTable:=LuaState.Stack.GetGlobal('meta');
     try
       LuaState.Stack.CopyTable(SourceTable, DestTable, MetaTable);
     finally
@@ -538,15 +648,15 @@ var
   LuaState: TLua;
   Blueprint: TLuaClassBlueprint;
 begin
-  FConstructed := False;
-  FStoredName := 'World';
+  FConstructed:=False;
+  FStoredName:='World';
 
-  LuaState := TLua.Create;
+  LuaState:=TLua.Create;
   try
-    Blueprint := LuaState.NewClass('Greeter');
+    Blueprint:=LuaState.NewClass('Greeter');
     Blueprint.AddProperty('name', GreeterNameGet, GreeterNameSet);
     Blueprint.AddMethod('describe', GreeterDescribe);
-    Blueprint.OnConstruction := GreeterConstruct;
+    Blueprint.OnConstruction:=GreeterConstruct;
     Blueprint.Register;
 
     AssertTrue(
@@ -579,6 +689,7 @@ begin
   RunTest('Error handling', TestErrorHandling);
   RunTest('LoadSource', TestLoadSource);
   RunTest('Inheritance', TestInheritance);
+  RunTest('Callback arg-table invoke', TestCallbackArgTableInvoke);
   RunTest('Memory usage', TestMemoryUsage);
   RunTest('CopyTable', TestCopyTable);
   RunTest('Class blueprints', TestClassBlueprintBinding);
@@ -589,11 +700,11 @@ end;
 var
   Suite: TLuaRegressionSuite;
 begin
-  ExitCode := 1;
-  Suite := TLuaRegressionSuite.Create;
+  ExitCode:=1;
+  Suite:=TLuaRegressionSuite.Create;
   try
     Suite.Run;
-    ExitCode := 0;
+    ExitCode:=0;
   finally
     Suite.Free;
   end;

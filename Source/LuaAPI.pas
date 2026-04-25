@@ -94,8 +94,10 @@
 // Uncomment them if you really need.
 //    luaL_pushmodule, luaL_openlib, luaL_register
 
-
-{$I LuaCompiler.inc}
+{$IFDEF FPC}
+  {$MODE DELPHIUNICODE}
+  {$H+}
+{$ENDIF}
 
 unit LuaAPI;
 

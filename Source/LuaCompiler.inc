@@ -1,4 +1,0 @@
-{$IFDEF FPC}
-  {$MODE DELPHIUNICODE}
-  {$H+}
-{$ENDIF}

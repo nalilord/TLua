@@ -1,6 +1,9 @@
 unit LuaCompat;
 
-{$I LuaCompiler.inc}
+{$IFDEF FPC}
+  {$MODE DELPHIUNICODE}
+  {$H+}
+{$ENDIF}
 
 interface
 
@@ -66,32 +69,32 @@ var
   Loop: Shortint;
   Buff: Pointer;
 begin
-  if (StackSize < 0) or
+  if (StackSize < 0) OR
     (StackSize > High(Shortint) + 1 - 2 * SizeOf(Longword)) then
   begin
-    Result := nil;
+    Result:=nil;
     Exit;
   end;
 
-  Result := VirtualAlloc(nil, $100, MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+  Result:=VirtualAlloc(nil, $100, MEM_COMMIT, PAGE_EXECUTE_READWRITE);
   if Assigned(Result) then
   begin
     try
-      Buff := Result;
+      Buff:=Result;
       if StackSize <= 0 then
       begin
-        Size := 0;
+        Size:=0;
       end else
       begin
-        Size := ((StackSize - 1) div SizeOf(Longword) + 1) * SizeOf(Longword);
-        for Loop := 1 to Size div SizeOf(Longword) do
+        Size:=((StackSize - 1) div SizeOf(Longword) + 1) * SizeOf(Longword);
+        for Loop:=1 to Size div SizeOf(Longword) do
         begin
           with PCallbackPush(Buff)^ do
           begin
-            PushParmOps[0] := $FF;
-            PushParmOps[1] := $74;
-            PushParmOps[2] := $24;
-            PushParmVal := Size;
+            PushParmOps[0]:=$FF;
+            PushParmOps[1]:=$74;
+            PushParmOps[2]:=$24;
+            PushParmVal:=Size;
           end;
           Inc(PCallbackPush(Buff));
         end;
@@ -99,20 +102,20 @@ begin
 
       with PCallbackCall(Buff)^ do
       begin
-        PushDataOps[0] := $FF;
-        PushDataOps[1] := $35;
-        PushDataVal := Addr(Method.Data);
-        CallCodeOps[0] := $FF;
-        CallCodeOps[1] := $15;
-        CallCodeVal := Addr(Method.Code);
-        AddEspXXOps[0] := $83;
-        AddEspXXOps[1] := $C4;
-        AddEspXXVal := Size + SizeOf(Longword);
-        Return := $C3;
+        PushDataOps[0]:=$FF;
+        PushDataOps[1]:=$35;
+        PushDataVal:=Addr(Method.Data);
+        CallCodeOps[0]:=$FF;
+        CallCodeOps[1]:=$15;
+        CallCodeVal:=Addr(Method.Code);
+        AddEspXXOps[0]:=$83;
+        AddEspXXOps[1]:=$C4;
+        AddEspXXVal:=Size + SizeOf(Longword);
+        Return:=$C3;
       end;
     except
       VirtualFree(Result, 0, MEM_RELEASE);
-      Result := nil;
+      Result:=nil;
     end;
   end;
 end;
@@ -164,62 +167,62 @@ var
   I, Count, Size, Offset: Integer;
   Ptr, Ptr2, CallbackPtr: PByte;
 begin
-  Count := SizeOf(c64regs);
+  Count:=SizeOf(c64regs);
   if NumArgs >= RegParamCount then
     Inc(Count, SizeOf(c64stack) + (NumArgs - RegParamCount) * SizeOf(c64copy) + SizeOf(c64call))
   else
     Inc(Count, SizeOf(c64jump));
 
-  CallbackPtr := VirtualAlloc(nil, Count, MEM_COMMIT, PAGE_EXECUTE_READWRITE);
-  Ptr := CallbackPtr;
+  CallbackPtr:=VirtualAlloc(nil, Count, MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+  Ptr:=CallbackPtr;
 
-  Size := 0;
+  Size:=0;
   if NumArgs >= RegParamCount then
   begin
-    Size := (1 + ((NumArgs + 1 - SkipParamCount) div 2) * 2) * Size64Bit;
+    Size:=(1 + ((NumArgs + 1 - SkipParamCount) div 2) * 2) * Size64Bit;
 
-    Ptr2 := Ptr;
-    Move(c64stack, Ptr^, SizeOf(c64stack));
+    Ptr2:=Ptr;
+    System.Move(c64stack, Ptr^, SizeOf(c64stack));
     Inc(Ptr, StackSrsOffset);
-    Move(Size, Ptr^, Size32Bit);
-    Ptr := Ptr2;
+    System.Move(Size, Ptr^, Size32Bit);
+    Ptr:=Ptr2;
     Inc(Ptr, SizeOf(c64stack));
 
-    for I := 0 to NumArgs - RegParamCount - 1 do
+    for I:=0 to NumArgs - RegParamCount - 1 do
     begin
-      Ptr2 := Ptr;
-      Move(c64copy, Ptr^, SizeOf(c64copy));
+      Ptr2:=Ptr;
+      System.Move(c64copy, Ptr^, SizeOf(c64copy));
       Inc(Ptr, CopySrcOffset);
-      Offset := Size + (I + ShadowParamCount + 1) * Size64Bit;
-      Move(Offset, Ptr^, Size32Bit);
+      Offset:=Size + (I + ShadowParamCount + 1) * Size64Bit;
+      System.Move(Offset, Ptr^, Size32Bit);
       Inc(Ptr, CopyDstOffset + Size32Bit);
-      Offset := (I + ShadowParamCount + 1) * Size64Bit;
-      Move(Offset, Ptr^, Size32Bit);
-      Ptr := Ptr2;
+      Offset:=(I + ShadowParamCount + 1) * Size64Bit;
+      System.Move(Offset, Ptr^, Size32Bit);
+      Ptr:=Ptr2;
       Inc(Ptr, SizeOf(c64copy));
     end;
   end;
 
-  Ptr2 := Ptr;
-  Move(c64regs, Ptr^, SizeOf(c64regs));
+  Ptr2:=Ptr;
+  System.Move(c64regs, Ptr^, SizeOf(c64regs));
   Inc(Ptr, RegSelfOffset);
-  Move(Method.Data, Ptr^, SizeOf(Method.Data));
+  System.Move(Method.Data, Ptr^, SizeOf(Method.Data));
   Inc(Ptr, RegMethodOffset);
-  Move(Method.Code, Ptr^, SizeOf(Method.Code));
-  Ptr := Ptr2;
+  System.Move(Method.Code, Ptr^, SizeOf(Method.Code));
+  Ptr:=Ptr2;
   Inc(Ptr, SizeOf(c64regs));
 
   if NumArgs < RegParamCount then
   begin
-    Move(c64jump, Ptr^, SizeOf(c64jump));
+    System.Move(c64jump, Ptr^, SizeOf(c64jump));
   end else
   begin
-    Move(c64call, Ptr^, SizeOf(c64call));
+    System.Move(c64call, Ptr^, SizeOf(c64call));
     Inc(Ptr, CallOffset);
-    Move(Size, Ptr^, Size32Bit);
+    System.Move(Size, Ptr^, Size32Bit);
   end;
 
-  Result := CallbackPtr;
+  Result:=CallbackPtr;
 end;
 
 procedure FreeCallbackThunk(Callback: Pointer);
@@ -233,20 +236,22 @@ end;
 { TLuaPlatform }
 
 class function TLuaPlatform.CallbackHandle(ACallback: lua_CFunction): TLuaCallbackHandle;
+var
+  CallbackPtr: Pointer absolute ACallback;
 begin
-  Result := nil;
-  Move(ACallback, Result, SizeOf(ACallback));
+  Result:=CallbackPtr;
 end;
 
 class function TLuaPlatform.CallbackHandle(AObject: TObject): TLuaCallbackHandle;
 begin
-  Result := AObject;
+  Result:=AObject;
 end;
 
 class function TLuaPlatform.CFunction(AHandle: TLuaCallbackHandle): lua_CFunction;
+var
+  Callback: lua_CFunction absolute AHandle;
 begin
-  Result := nil;
-  Move(AHandle, Result, SizeOf(Result));
+  Result:=Callback;
 end;
 
 class procedure TLuaPlatform.PushCallback(L: Plua_State; AHandle: TLuaCallbackHandle; ADispatcher: lua_CFunction);
@@ -289,27 +294,27 @@ begin
   SetLength(Result, SizeOf(TGUID) * 2);
   if CreateGUID(Guid) = 0 then
   begin
-    Bytes := @Guid;
-    for I := 0 to SizeOf(TGUID) - 1 do
+    Bytes:=@Guid;
+    for I:=0 to SizeOf(TGUID) - 1 do
     begin
-      Result[I * 2 + 1] := HexChars[Bytes^ shr 4];
-      Result[I * 2 + 2] := HexChars[Bytes^ and $0F];
+      Result[I * 2 + 1]:=HexChars[Bytes^ shr 4];
+      Result[I * 2 + 2]:=HexChars[Bytes^ AND $0F];
       Inc(Bytes);
     end;
   end else
   begin
-    Result := StringOfChar('0', SizeOf(TGUID) * 2);
+    Result:=StringOfChar('0', SizeOf(TGUID) * 2);
   end;
 end;
 
 class function TLuaPlatform.NewHashedStringList(ADuplicates: TDuplicates; ACaseSensitive: Boolean): THashedStringList;
 begin
   {$IFDEF FPC}
-  Result := THashedStringList.Create;
-  Result.Duplicates := ADuplicates;
-  Result.CaseSensitive := ACaseSensitive;
+  Result:=THashedStringList.Create;
+  Result.Duplicates:=ADuplicates;
+  Result.CaseSensitive:=ACaseSensitive;
   {$ELSE}
-  Result := THashedStringList.Create(ADuplicates, True, False);
+  Result:=THashedStringList.Create(ADuplicates, True, False);
   {$ENDIF}
 end;
 
@@ -319,12 +324,12 @@ constructor TLuaCallbackThunk.Create(AOwner: TObject; const Method: TMethod; Arg
 begin
   inherited Create;
 
-  FOwner := AOwner;
+  FOwner:=AOwner;
   {$IFDEF MSWINDOWS}
   {$IFNDEF CPUX64}
-  FEntryPoint := lua_CFunction(MakeCdeclCallback(Method, SizeOf(NativeInt)));
+  FEntryPoint:=lua_CFunction(MakeCdeclCallback(Method, SizeOf(NativeInt)));
   {$ELSE}
-  FEntryPoint := lua_CFunction(MakeCallback(Method, ArgCount));
+  FEntryPoint:=lua_CFunction(MakeCallback(Method, ArgCount));
   {$ENDIF}
   {$ENDIF}
 end;
@@ -332,7 +337,7 @@ end;
 destructor TLuaCallbackThunk.Destroy;
 begin
   {$IFDEF MSWINDOWS}
-  FreeCallbackThunk(Pointer(FEntryPoint));
+  FreeCallbackThunk(TLuaPlatform.CallbackHandle(FEntryPoint));
   {$ENDIF}
   inherited;
 end;
@@ -340,9 +345,9 @@ end;
 function TLuaCallbackThunk.Handle: TLuaCallbackHandle;
 begin
   {$IFDEF MSWINDOWS}
-  Result := TLuaPlatform.CallbackHandle(FEntryPoint);
+  Result:=TLuaPlatform.CallbackHandle(FEntryPoint);
   {$ELSE}
-  Result := TLuaPlatform.CallbackHandle(FOwner);
+  Result:=TLuaPlatform.CallbackHandle(FOwner);
   {$ENDIF}
 end;
 

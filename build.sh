@@ -87,6 +87,7 @@ case "$PLATFORM" in
     SOURCE_DIR_WIN="$(wslpath -w "$SOURCE_DIR")"
     DCC="${DCC32:-/mnt/c/Program Files (x86)/Embarcadero/Studio/${BDS_VERSION}/bin/dcc32.exe}"
     DELPHI_LIB="${DELPHI_LIB_WIN32:-c:\\program files (x86)\\embarcadero\\studio\\${BDS_VERSION}\\lib\\win32\\release}"
+    NAMESPACE_SET="Winapi;System.Win;Data.Win;Datasnap.Win;Web.Win;Soap.Win;Xml.Win;System;Xml;Data;Datasnap;Web;Soap"
     RUNTIME_DLL_NAME="lua55.dll"
     ;;
   Win64|win64)
@@ -95,6 +96,7 @@ case "$PLATFORM" in
     SOURCE_DIR_WIN="$(wslpath -w "$SOURCE_DIR")"
     DCC="${DCC64:-/mnt/c/Program Files (x86)/Embarcadero/Studio/${BDS_VERSION}/bin/dcc64.exe}"
     DELPHI_LIB="${DELPHI_LIB_WIN64:-c:\\program files (x86)\\embarcadero\\studio\\${BDS_VERSION}\\lib\\win64\\release}"
+    NAMESPACE_SET="Winapi;System.Win;Data.Win;Datasnap.Win;Web.Win;Soap.Win;Xml.Win;System;Xml;Data;Datasnap;Web;Soap"
     RUNTIME_DLL_NAME="lua55_64.dll"
     ;;
   Linux|linux|Linux64|linux64)
@@ -131,7 +133,9 @@ if [[ "$PLATFORM" == "Linux64" ]]; then
   RUNTIME_SO_TARGET="$BUILD_DIR/$RUNTIME_SO_NAME"
   mkdir -p "$RUNTIME_DIR"
   build_linux_runtime "$RUNTIME_SO_SOURCE"
-  cp -f "$RUNTIME_SO_SOURCE" "$RUNTIME_SO_TARGET"
+  if [[ ! -f "$RUNTIME_SO_TARGET" ]] || ! cmp -s "$RUNTIME_SO_SOURCE" "$RUNTIME_SO_TARGET"; then
+    cp -f "$RUNTIME_SO_SOURCE" "$RUNTIME_SO_TARGET"
+  fi
 
   FPC_ARGS=(
     -B
@@ -183,6 +187,7 @@ else
     -B \
     -U"$SEARCH_PATH_WIN" \
     -I"${PROJECT_DIR_WIN};${SOURCE_DIR_WIN}" \
+    -NS"$NAMESPACE_SET" \
     -N0"$BUILD_DIR_WIN" \
     -NU"$BUILD_DIR_WIN" \
     -D"$DEFINE_SET" \

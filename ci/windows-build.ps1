@@ -1,6 +1,3 @@
-Set-StrictMode -Version Latest
-$ErrorActionPreference = 'Stop'
-
 param(
   [Parameter(Mandatory = $true)]
   [string]$Project,
@@ -12,6 +9,9 @@ param(
 
   [string]$BuildDir
 )
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
 
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSCommandPath)
 $projectPath = Join-Path $repoRoot $Project
@@ -29,10 +29,12 @@ $sourceDir = Join-Path $repoRoot 'Source'
 if ($Platform -eq 'Win32') {
   $compiler = if ($env:DCC32) { $env:DCC32 } else { "C:\Program Files (x86)\Embarcadero\Studio\$BdsVersion\bin\dcc32.exe" }
   $delphiLib = if ($env:DELPHI_LIB_WIN32) { $env:DELPHI_LIB_WIN32 } else { "C:\Program Files (x86)\Embarcadero\Studio\$BdsVersion\lib\win32\release" }
+  $namespaceSet = 'Winapi;System.Win;Data.Win;Datasnap.Win;Web.Win;Soap.Win;Xml.Win;System;Xml;Data;Datasnap;Web;Soap'
   $runtimeDllName = 'lua55.dll'
 } else {
   $compiler = if ($env:DCC64) { $env:DCC64 } else { "C:\Program Files (x86)\Embarcadero\Studio\$BdsVersion\bin\dcc64.exe" }
   $delphiLib = if ($env:DELPHI_LIB_WIN64) { $env:DELPHI_LIB_WIN64 } else { "C:\Program Files (x86)\Embarcadero\Studio\$BdsVersion\lib\win64\release" }
+  $namespaceSet = 'Winapi;System.Win;Data.Win;Datasnap.Win;Web.Win;Soap.Win;Xml.Win;System;Xml;Data;Datasnap;Web;Soap'
   $runtimeDllName = 'lua55_64.dll'
 }
 
@@ -58,6 +60,7 @@ try {
     '-B'
     "-U$searchPath"
     "-I$sourceDir"
+    "-NS$namespaceSet"
     "-N0$BuildDir"
     "-NU$BuildDir"
     "-DPLATFORM_$Platform"
@@ -74,4 +77,5 @@ try {
 }
 
 Copy-Item -LiteralPath $runtimeSource -Destination $runtimeTarget -Force
-Write-Host "Built $(Split-Path -LeafBase $projectPath) for $Platform in $BuildDir"
+$projectName = [System.IO.Path]::GetFileNameWithoutExtension($projectPath)
+Write-Host "Built $projectName for $Platform in $BuildDir"

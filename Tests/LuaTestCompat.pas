@@ -1,6 +1,9 @@
 unit LuaTestCompat;
 
-{$I ../Source/LuaCompiler.inc}
+{$IFDEF FPC}
+  {$MODE DELPHIUNICODE}
+  {$H+}
+{$ENDIF}
 
 interface
 
@@ -26,7 +29,7 @@ uses
 
 function TempFilePath(const AFileName: string): string;
 begin
-  Result := IncludeTrailingPathDelimiter(GetTempDir(False)) + AFileName;
+  Result:=IncludeTrailingPathDelimiter(GetTempDir(False)) + AFileName;
 end;
 
 procedure WriteAllText(const AFileName, AText: string);
@@ -34,9 +37,9 @@ var
   Bytes: RawByteString;
   Stream: TFileStream;
 begin
-  Stream := TFileStream.Create(AFileName, fmCreate);
+  Stream:=TFileStream.Create(AFileName, fmCreate);
   try
-    Bytes := UTF8Encode(AText);
+    Bytes:=UTF8Encode(AText);
     if Bytes <> '' then
       Stream.WriteBuffer(Pointer(Bytes)^, Length(Bytes));
   finally
@@ -46,7 +49,7 @@ end;
 
 function FileExistsCompat(const AFileName: string): Boolean;
 begin
-  Result := FileExists(AFileName);
+  Result:=FileExists(AFileName);
 end;
 
 procedure DeleteFileCompat(const AFileName: string);
@@ -58,7 +61,7 @@ end;
 
 function TempFilePath(const AFileName: string): string;
 begin
-  Result := TPath.Combine(TPath.GetTempPath, AFileName);
+  Result:=TPath.Combine(TPath.GetTempPath, AFileName);
 end;
 
 procedure WriteAllText(const AFileName, AText: string);
@@ -68,7 +71,7 @@ end;
 
 function FileExistsCompat(const AFileName: string): Boolean;
 begin
-  Result := TFile.Exists(AFileName);
+  Result:=TFile.Exists(AFileName);
 end;
 
 procedure DeleteFileCompat(const AFileName: string);

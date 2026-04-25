@@ -34,7 +34,10 @@
 
 unit Lua;
 
-{$I LuaCompiler.inc}
+{$IFDEF FPC}
+  {$MODE DELPHIUNICODE}
+  {$H+}
+{$ENDIF}
 
 interface
 
@@ -87,6 +90,7 @@ type
   TLuaCompareOperation = (coEqual, coLessThan, coLessOrEqual);
   TLuaType = (ltNone = -1, ltNil, ltBoolean, ltLightUserdata, ltNumber, ltString, ltTable, ltFunction, ltUserdata,
     ltThread, (* new types *) ltBlueprint, ltClass);
+  TLuaCallType = (mtNative, mtLua);
 
   // Type mappings
   TLuaState = Plua_State;
@@ -94,7 +98,7 @@ type
   TLuaCFunctionEvent = lua_CFunction;
 
   // Events
-  {$I LuaProcedureCompat.inc}
+  TLuaProcedure = {$IFNDEF FPC}reference to{$ENDIF} procedure(Sender: TLua; Args: TLuaArgs; Results: TLuaResults);
   TLuaFunctionEvent = procedure(Sender: TLua; Args: TLuaArgs; Results: TLuaResults);
   TLuaMethodEvent = procedure(Sender: TLua; Args: TLuaArgs; Results: TLuaResults) of object;
   TLuaClassConstructionEvent = procedure(Sender: TLua; Blueprint: TLuaClassBlueprint; Args: TLuaArgs; var UserClass: TObject; var Allow: Boolean) of object;
@@ -383,12 +387,10 @@ type
   end;
 
   TLuaClassBlueprint = class(TLuaObject)
-  private type
-    CallType = (mtNative, mtLua);
   strict private type
     MethodEntry = packed record
       N: String;
-      case T: CallType of
+      case T: TLuaCallType of
         mtNative: (D: TLuaClassMethodEvent);
         mtLua: (L: Integer);
     end;
@@ -427,7 +429,7 @@ type
     function GetProperties(Index: Integer): String;
   protected
     class function FromGlobal(ALua: TLua; AName: String): TLuaObject; override; // We need to override this here, otherwise Initialize would be called...
-    class function Acquire(AState: TLuaState; AKeepOnStack: Boolean = False): TLuaClassBlueprint;
+    class function Acquire(AState: TLuaState; AKeepOnStack: Boolean = False; AIndex: Integer = 1): TLuaClassBlueprint;
     class function FromTable(ATable: TLuaTable): TLuaClassBlueprint;
     constructor Create(ALua: TLua; AName: String); overload;
     constructor Create(ABlueprint: TLuaClassBlueprint; AName: String); overload;
@@ -461,6 +463,7 @@ type
     procedure DeleteIndexProperty(AIndex: Integer);
     procedure Register;
     function HasMethod(AName: String): Boolean;
+    function TryGetMethodType(AName: String; out AType: TLuaCallType): Boolean;
     function HasProperty(AName: String): Boolean;
     function Construct(AData: Pointer = nil): TLuaClass;
     function Inherit(AName: String = ''): TLuaClassBlueprint;
@@ -499,12 +502,18 @@ type
     procedure LuaInheritedHandler(Sender: TLua; Clazz: TLuaClass; Args: TLuaArgs; Results: TLuaResults);
   protected
     class function FromGlobal(ALua: TLua; AName: String): TLuaObject; override; // We need to override this here, otherwise Initialize would be called...
-    class function Acquire(AState: TLuaState; AKeepOnStack: Boolean = False): TLuaClass;
+    class function Acquire(AState: TLuaState; AKeepOnStack: Boolean = False; AIndex: Integer = 1): TLuaClass;
     class function New(ALua: TLua; ABlueprint: TLuaClassBlueprint; AData: Pointer = nil): TLuaClass;
     procedure ReleaseCleanup;
   public
     destructor Destroy; override;
+    function TryGetMethodType(AMethod: String; out AType: TLuaCallType): Boolean;
+    function GetMethodType(AMethod: String): TLuaCallType;
+    function HasMethod(AMethod: String): Boolean;
+    function HasNativeMethod(AMethod: String): Boolean;
+    function HasLuaMethod(AMethod: String): Boolean;
     function Invoke(AMethod: String): TLuaClassMethodInvoker;
+    function TryInvoke(AMethod: String; out Invoker: TLuaClassMethodInvoker): Boolean;
     function Inherit(AMethod: String): TLuaClassMethodInvoker;
     property Blueprint: TLuaClassBlueprint                         read FBlueprint;
     property Methods[Name: String]: TLuaClassMethod                read GetMethods;
@@ -520,7 +529,7 @@ type
     InvokerData = packed record
       N: String;
       C: TLuaClass;
-      case T: TLuaClassBlueprint.CallType of
+      case T: TLuaCallType of
         mtNative: (E: TLuaClassMethodEvent; F: TLuaCallbackHandle);
         mtLua: (R: Integer);
     end;
@@ -722,7 +731,7 @@ type
     function PushBoolean(AValue: Boolean): Integer; inline;
     function PushString(AValue: String): Integer; inline;
     function PushPointer(AValue: Pointer): Integer; inline;
-    function PushFunction(AValue: TLuaCallbackHandle): Integer; inline;
+    function PushFunction(AValue: TLuaCallbackHandle): Integer;
     function PushVariant(AValue: Variant): Integer; inline;
     function PushValue(AIndex: Integer): Integer; inline;
     function IsNil(AIndex: Integer): Boolean; inline;
@@ -1874,13 +1883,13 @@ begin
     begin
       // Check if this is a blueprint
       FValue.K:=lvtBlueprint;
-      FValue.B:=TLuaClassBlueprint.Acquire(FLua.State, True);
+      FValue.B:=TLuaClassBlueprint.Acquire(FLua.State, True, -1);
 
       // No bp? Maybe a class?
       if NOT Assigned(FValue.B) then
       begin
         FValue.K:=lvtClass;
-        FValue.C:=TLuaClass.Acquire(FLua.State, True);
+        FValue.C:=TLuaClass.Acquire(FLua.State, True, -1);
       end;
 
       // Okok now we can assume it is "only" a table
@@ -2481,17 +2490,17 @@ function TLuaTable.ToString(const AVarName: String = ''): String;
 
   function EscapeToLuaStr(Subject: String): String;
   begin
-    Result := Subject;
-    Result := StringReplace(Result, '\', '\\', [rfReplaceAll, rfIgnoreCase]);
-    Result := StringReplace(Result, #13, '\r', [rfReplaceAll, rfIgnoreCase]);
-    Result := StringReplace(Result, #10, '\n', [rfReplaceAll, rfIgnoreCase]);
-    Result := StringReplace(Result, #09, '\t', [rfReplaceAll, rfIgnoreCase]);
-    Result := StringReplace(Result, '"', '\"', [rfReplaceAll, rfIgnoreCase]);
+    Result:=Subject;
+    Result:=StringReplace(Result, '\', '\\', [rfReplaceAll, rfIgnoreCase]);
+    Result:=StringReplace(Result, #13, '\r', [rfReplaceAll, rfIgnoreCase]);
+    Result:=StringReplace(Result, #10, '\n', [rfReplaceAll, rfIgnoreCase]);
+    Result:=StringReplace(Result, #09, '\t', [rfReplaceAll, rfIgnoreCase]);
+    Result:=StringReplace(Result, '"', '\"', [rfReplaceAll, rfIgnoreCase]);
   end;
 
   procedure WriteIdentToStr(IdentDepth: Integer);
   begin
-    Result := Result + StringOfChar(' ', IdentDepth);
+    Result:=Result + StringOfChar(' ', IdentDepth);
   end;
 
   procedure WriteTableValueToStr(TableRecord: TLuaTableRecord);
@@ -3028,7 +3037,7 @@ var
 begin
   while FInheritances.Count > 0 do
   begin
-    Blueprint := FInheritances.Last;
+    Blueprint:=FInheritances.Last;
     FInheritances.Extract(Blueprint);
     Blueprint.Free;
   end;
@@ -3038,7 +3047,7 @@ begin
 
   while FInstances.Count > 0 do
   begin
-    Instance := FInstances.Last;
+    Instance:=FInstances.Last;
     FInstances.Extract(Instance);
     Instance.Free;
   end;
@@ -3063,24 +3072,26 @@ begin
   end;
 end;
 
-class function TLuaClassBlueprint.Acquire(AState: TLuaState; AKeepOnStack: Boolean = False): TLuaClassBlueprint;
+class function TLuaClassBlueprint.Acquire(AState: TLuaState; AKeepOnStack: Boolean = False; AIndex: Integer = 1): TLuaClassBlueprint;
 var
+  StackIndex: Integer;
   Name: AnsiString;
   Blueprint: TLuaClassBlueprint;
 begin
   Result:=nil;
   Blueprint:=nil;
+  StackIndex:=lua_absindex(AState, AIndex);
 
   (**********************************************************************)
   (* Low level Lua API call because we dont have a TLua instance here *)
   (**********************************************************************)
 
   // Is the current call a blueprint table stack?
-  if (lua_gettop(AState) > 0) AND (lua_type(AState, 1) = LUA_TTABLE) then
+  if (lua_gettop(AState) > 0) AND (lua_type(AState, StackIndex) = LUA_TTABLE) then
   begin
     // Get the blueprint name
     lua_pushstring(AState, '_classname');
-    lua_rawget(AState, 1);
+    lua_rawget(AState, StackIndex);
     if lua_isstring(AState, -1) then
     begin
       Name:=StrPas(lua_tostring(AState, -1));
@@ -3089,7 +3100,7 @@ begin
 
     // Get the blueprint object
     lua_pushstring(AState, '_blueprint');
-    lua_rawget(AState, 1);
+    lua_rawget(AState, StackIndex);
     if lua_islightuserdata(AState, -1) then
     begin
       Blueprint:=lua_topointer(AState, -1);
@@ -3101,7 +3112,7 @@ begin
     begin
       if NOT AKeepOnStack then
       begin
-        lua_remove(AState, 1);
+        lua_remove(AState, StackIndex);
       end;
 
       Result:=Blueprint;
@@ -3631,15 +3642,18 @@ begin
   Result:=Acquire(ALua.State);
 end;
 
-class function TLuaClass.Acquire(AState: TLuaState; AKeepOnStack: Boolean = False): TLuaClass;
+class function TLuaClass.Acquire(AState: TLuaState; AKeepOnStack: Boolean = False; AIndex: Integer = 1): TLuaClass;
+var
+  StackIndex: Integer;
 begin
   Result:=nil;
+  StackIndex:=lua_absindex(AState, AIndex);
 
-  if (lua_gettop(AState) > 0) AND (lua_type(AState, 1) = LUA_TTABLE) then
+  if (lua_gettop(AState) > 0) AND (lua_type(AState, StackIndex) = LUA_TTABLE) then
   begin
     // Get class object
     lua_pushstring(AState, '_self');
-    lua_rawget(AState, 1);
+    lua_rawget(AState, StackIndex);
     if lua_islightuserdata(AState, -1) then
     begin
       Result:=lua_topointer(AState, -1);
@@ -3648,7 +3662,7 @@ begin
 
     // Get and check RefId
     lua_pushstring(AState, '_refid');
-    lua_rawget(AState, 1);
+    lua_rawget(AState, StackIndex);
     if lua_isinteger(AState, -1) then
     begin
       if Result.RefId <> lua_tointeger(AState, -1) then
@@ -3660,18 +3674,18 @@ begin
 
     // Is this a property index?
     lua_pushstring(AState, '_idxpropname');
-    lua_rawget(AState, 1);
+    lua_rawget(AState, StackIndex);
     if lua_isstring(AState, -1) then
     begin
-//      FIsIndexProp := True;
-//      FName := String(LuaToString(AState, -1));
+//      FIsIndexProp:=True;
+//      FName:=String(LuaToString(AState, -1));
     end;
     lua_pop(AState, 1);
 
     // Remove the table object from the top of the stack
     if Assigned(Result) AND NOT AKeepOnStack then
     begin
-      lua_remove(AState, 1);
+      lua_remove(AState, StackIndex);
     end;
   end;
 end;
@@ -3702,6 +3716,29 @@ begin
   end;
 end;
 
+function TLuaClassBlueprint.TryGetMethodType(AName: String; out AType: TLuaCallType): Boolean;
+var
+  Method: MethodEntry;
+begin
+  Result:=GetMethod(AName, Method);
+  if Result then
+  begin
+    AType:=Method.T;
+  end;
+end;
+
+function TLuaClass.GetMethodType(AMethod: String): TLuaCallType;
+begin
+  Result:=mtNative;
+
+  TryGetMethodType(AMethod, Result);
+end;
+
+function TLuaClass.TryGetMethodType(AMethod: String; out AType: TLuaCallType): Boolean;
+begin
+  Result:=Assigned(FBlueprint) AND FBlueprint.TryGetMethodType(AMethod, AType);
+end;
+
 function TLuaClass.GetProperties(Name: String): TLuaClassProperty;
 var
   Idx: Integer;
@@ -3713,6 +3750,25 @@ begin
   begin
     Result:=TLuaClassProperty(FProperties.Objects[Idx]);
   end;
+end;
+
+function TLuaClass.HasMethod(AMethod: String): Boolean;
+begin
+  Result:=Assigned(FBlueprint) AND FBlueprint.HasMethod(AMethod);
+end;
+
+function TLuaClass.HasNativeMethod(AMethod: String): Boolean;
+var
+  MethodType: TLuaCallType;
+begin
+  Result:=TryGetMethodType(AMethod, MethodType) AND (MethodType = mtNative);
+end;
+
+function TLuaClass.HasLuaMethod(AMethod: String): Boolean;
+var
+  MethodType: TLuaCallType;
+begin
+  Result:=TryGetMethodType(AMethod, MethodType) AND (MethodType = mtLua);
 end;
 
 function TLuaClass.Inherit(AMethod: String): TLuaClassMethodInvoker;
@@ -3729,10 +3785,16 @@ function TLuaClass.Invoke(AMethod: String): TLuaClassMethodInvoker;
 begin
   Result:=nil;
 
-  if FBlueprint.HasMethod(AMethod) then
+  if HasMethod(AMethod) then
   begin
     Result:=FBlueprint.NewMethodInvoker(AMethod, Self);
   end;
+end;
+
+function TLuaClass.TryInvoke(AMethod: String; out Invoker: TLuaClassMethodInvoker): Boolean;
+begin
+  Invoker:=Invoke(AMethod);
+  Result:=Assigned(Invoker);
 end;
 
 procedure TLuaClass.LuaInheritedHandler(Sender: TLua; Clazz: TLuaClass; Args: TLuaArgs; Results: TLuaResults);
@@ -3811,13 +3873,24 @@ begin
     // Create props
     for I:=0 to FBlueprint.FProperties.Count - 1 do
     begin
-      FProperties.AddObject(FBlueprint.FProperties[I].N, TLuaClassProperty.Create(Result, FBlueprint.FProperties[I].N, FBlueprint.FProperties[I].G, FBlueprint.FProperties[I].S));
+      FProperties.AddObject(
+        FBlueprint.FProperties[I].N,
+        TLuaClassProperty.Create(Result, FBlueprint.FProperties[I].N, FBlueprint.FProperties[I].G, FBlueprint.FProperties[I].S)
+      );
     end;
 
     // Create index props
     for I:=0 to FBlueprint.FIndexProperties.Count - 1 do
     begin
-      FIndexProperties.AddObject(FBlueprint.FIndexProperties[I].N, TLuaClassIndexProperty.Create(Result, FBlueprint.FIndexProperties[I].N, FBlueprint.FIndexProperties[I].G, FBlueprint.FIndexProperties[I].S));
+      FIndexProperties.AddObject(
+        FBlueprint.FIndexProperties[I].N,
+        TLuaClassIndexProperty.Create(
+          Result,
+          FBlueprint.FIndexProperties[I].N,
+          FBlueprint.FIndexProperties[I].G,
+          FBlueprint.FIndexProperties[I].S
+        )
+      );
     end;
 
     // Push to stack
@@ -5405,7 +5478,10 @@ begin
     FValues.Add(TLuaValue.New(FLua, I));
     if FCount <> FLua.Stack.Top then
     begin
-      raise ELuaExecuteException.Create('Stack manipulation error triggered, was ' + IntToStr(FCount) + ' now is ' + IntToStr(FLua.Stack.Top) + '.'#13#10'Inconsistent data, abort!');
+      raise ELuaExecuteException.Create(
+        'Stack manipulation error triggered, was ' + IntToStr(FCount) + ' now is ' +
+        IntToStr(FLua.Stack.Top) + '.'#13#10'Inconsistent data, abort!'
+      );
     end;
   end;
 
@@ -5572,7 +5648,38 @@ end;
 
 procedure TLuaResults.PushValue(AValue: TLuaValue);
 begin
-  FValues.Add(TLuaValue.FromRefId(AValue.Lua, AValue.RefId));
+  if Assigned(AValue) then
+  begin
+    if AValue.Lua.GetRefOwner = FLua.GetRefOwner then
+    begin
+      // Rebind shared-registry values to the destination state so object pushes land on the correct stack.
+      FValues.Add(TLuaValue.FromRefId(FLua, AValue.RefId));
+    end else
+    begin
+      case AValue.Typ of
+        ltNone,
+        ltNil:
+          PushNil;
+        ltBoolean:
+          PushBool(AValue.AsBool);
+        ltNumber:
+          if AValue.IsInt then
+            PushInt(AValue.AsInt)
+          else
+            PushFloat(AValue.AsFloat);
+        ltString:
+          PushStr(AValue.AsStr);
+        ltLightUserdata,
+        ltUserdata:
+          FValues.Add(TLuaValue.FromValue(FLua, AValue.AsPtr));
+        else
+          raise ELuaException.Create('Cannot forward complex values across unrelated Lua states.');
+      end;
+    end;
+  end else
+  begin
+    PushNil;
+  end;
 end;
 
 initialization

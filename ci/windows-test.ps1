@@ -1,12 +1,12 @@
-Set-StrictMode -Version Latest
-$ErrorActionPreference = 'Stop'
-
 param(
   [string]$Project = 'Tests\TLuaTests.dpr',
 
   [ValidateSet('Win32', 'Win64')]
   [string]$Platform = 'Win64'
 )
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
 
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSCommandPath)
 $projectName = [System.IO.Path]::GetFileNameWithoutExtension($Project)
