@@ -495,9 +495,14 @@ type
     FCleanupList: TObjectList;
     FLuaReleaseHandler: TLuaCallbackHandle;
     FLuaInheritedHandler: TLuaCallbackHandle;
+    FIsReleased: Boolean;
+    FIsDetached: Boolean;
     function GetMethods(Name: String): TLuaClassMethod;
     function GetProperties(Name: String): TLuaClassProperty;
     function GetIndexProperties(Name: String): TLuaClassIndexProperty;
+    procedure DetachCallbackHandlers;
+    procedure DetachFromBlueprintLifetime;
+    procedure DetachFromLuaRuntime;
     procedure LuaReleaseHandler(Sender: TLua; Clazz: TLuaClass);
     procedure LuaInheritedHandler(Sender: TLua; Clazz: TLuaClass; Args: TLuaArgs; Results: TLuaResults);
   protected
@@ -3012,6 +3017,7 @@ begin
   FIndexProperties:=TList<IndexPropertyEntry>.Create;
   FInstances:=TObjectList<TLuaClass>.Create;
   FInheritances:=TObjectList<TLuaClassBlueprint>.Create;
+  FInstances.OwnsObjects:=False;
 
   // Properties
   FLuaIndexHandler:=TLuaCallbackWrapper.New(LuaIndexHandler, LuaNewIndexHandler).Callback;
@@ -3049,7 +3055,7 @@ begin
   begin
     Instance:=FInstances.Last;
     FInstances.Extract(Instance);
-    Instance.Free;
+    Instance.DetachFromLuaRuntime;
   end;
 
   FInstances.OwnsObjects:=False;
@@ -3280,8 +3286,8 @@ begin
   for I:=0 to FInheritances.Count - 1 do
     FInheritances[I].Finalize;
 
-  for I:=0 to FInstances.Count - 1 do
-    FInstances[I].ReleaseCleanup;
+  while FInstances.Count > 0 do
+    FInstances.Last.DetachFromLuaRuntime;
 end;
 
 function TLuaClassBlueprint.Construct(AData: Pointer = nil): TLuaClass;
@@ -3594,15 +3600,9 @@ destructor TLuaClass.Destroy;
 var
   I: Integer;
 begin
-  // Remove this instance from the blueprint list
-  FBlueprint.FInstances.Extract(Self);
-
-  // Cleanup the remaining stuff...
+  DetachFromBlueprintLifetime;
   ReleaseCleanup;
-
-  // Free the callback wrappers...
-  TLuaCallbackWrapper.PrepareRelease(FLuaReleaseHandler);
-  TLuaCallbackWrapper.PrepareRelease(FLuaInheritedHandler);
+  DetachCallbackHandlers;
 
   try
     for I:=0 to FIndexProperties.Count - 1 do
@@ -3632,6 +3632,8 @@ begin
   end;
 
   FreeAndNil(FCleanupList);
+  FBlueprint:=nil;
+  FIsDetached:=True;
 
   inherited;
 end;
@@ -3795,6 +3797,44 @@ function TLuaClass.TryInvoke(AMethod: String; out Invoker: TLuaClassMethodInvoke
 begin
   Invoker:=Invoke(AMethod);
   Result:=Assigned(Invoker);
+end;
+
+procedure TLuaClass.DetachCallbackHandlers;
+begin
+  if nil <> FLuaReleaseHandler then
+  begin
+    TLuaCallbackWrapper.PrepareRelease(FLuaReleaseHandler);
+    FLuaReleaseHandler:=nil;
+  end;
+
+  if nil <> FLuaInheritedHandler then
+  begin
+    TLuaCallbackWrapper.PrepareRelease(FLuaInheritedHandler);
+    FLuaInheritedHandler:=nil;
+  end;
+end;
+
+procedure TLuaClass.DetachFromBlueprintLifetime;
+begin
+  if NOT FIsDetached then
+  begin
+    if Assigned(FBlueprint) AND Assigned(FBlueprint.FInstances) then
+    begin
+      FBlueprint.FInstances.Extract(Self);
+    end;
+
+    FIsDetached:=True;
+  end;
+end;
+
+procedure TLuaClass.DetachFromLuaRuntime;
+begin
+  ReleaseCleanup;
+  DetachFromBlueprintLifetime;
+  DetachCallbackHandlers;
+  UnRef;
+  FBlueprint:=nil;
+  FLua:=nil;
 end;
 
 procedure TLuaClass.LuaInheritedHandler(Sender: TLua; Clazz: TLuaClass; Args: TLuaArgs; Results: TLuaResults);
@@ -4021,33 +4061,37 @@ var
   end;
 
 begin
-  if Assigned(FBlueprint.OnRelease) then
+  if NOT FIsReleased AND Assigned(FBlueprint) AND Assigned(FBlueprint.OnRelease) then
   begin
     FBlueprint.OnRelease(FLua, Self, FUserClass);
+    FIsReleased:=True;
   end;
 
-  Table:=PushToStack;
-  try
-    if (lssDestroy <> FLua.FStatus) AND FLua.Stack.IsTable(Table) then
-    begin
-      ClearField('_self');
-      ClearField('_refid');
-
-      ClearField('__metatable');
-      ClearField('__index');
-      ClearField('__newindex');
-      ClearField('__gc');
-      ClearField('__call');
-
-      for I:=0 to FMethods.Count - 1 do
+  if Assigned(FLua) AND (RefId <> LUA_NOREF) then
+  begin
+    Table:=PushToStack;
+    try
+      if (lssDestroy <> FLua.FStatus) AND FLua.Stack.IsTable(Table) then
       begin
-        ClearField(FMethods[I]);
-      end;
+        ClearField('_self');
+        ClearField('_refid');
 
-      ClearField('new');
+        ClearField('__metatable');
+        ClearField('__index');
+        ClearField('__newindex');
+        ClearField('__gc');
+        ClearField('__call');
+
+        for I:=0 to FMethods.Count - 1 do
+        begin
+          ClearField(FMethods[I]);
+        end;
+
+        ClearField('new');
+      end;
+    finally
+      PopFromStack;
     end;
-  finally
-    PopFromStack;
   end;
 end;
 

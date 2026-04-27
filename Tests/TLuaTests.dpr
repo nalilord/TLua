@@ -37,6 +37,8 @@ type
     FAssertionCount: Integer;
     FBaseSpeakCount: Integer;
     FConstructed: Boolean;
+    FProxyMethodCount: Integer;
+    FProxyReleaseCount: Integer;
     FStoredName: string;
     procedure AssertTrue(ACondition: Boolean; const AMessage: string);
     procedure AssertEqual(const AExpected, AActual, AMessage: string); overload;
@@ -48,6 +50,8 @@ type
     procedure LibraryJoin(Sender: TLua; Args: TLuaArgs; Results: TLuaResults);
     procedure LibraryJoinReplacement(Sender: TLua; Args: TLuaArgs; Results: TLuaResults);
     procedure InvokeAttachFromArgs(Sender: TLua; Args: TLuaArgs; Results: TLuaResults);
+    procedure ProxyLifetimePing(Sender: TLua; Clazz: TLuaClass; Method: TLuaClassMethod; Args: TLuaArgs; Results: TLuaResults);
+    procedure ProxyLifetimeRelease(Sender: TLua; Clazz: TLuaClass; var UserClass: TObject);
     procedure BaseSpeak(Sender: TLua; Clazz: TLuaClass; Method: TLuaClassMethod; Args: TLuaArgs; Results: TLuaResults);
     procedure GreeterConstruct(Sender: TLua; Blueprint: TLuaClassBlueprint; Args: TLuaArgs; var UserClass: TObject; var Allow: Boolean);
     procedure GreeterDescribe(Sender: TLua; Clazz: TLuaClass; Method: TLuaClassMethod; Args: TLuaArgs; Results: TLuaResults);
@@ -66,6 +70,7 @@ type
     procedure TestMemoryUsage;
     procedure TestCopyTable;
     procedure TestClassBlueprintBinding;
+    procedure TestClassDestroyLifetime;
   public
     procedure Run;
   end;
@@ -164,6 +169,17 @@ begin
   finally
     Invoker.Free;
   end;
+end;
+
+procedure TLuaRegressionSuite.ProxyLifetimePing(Sender: TLua; Clazz: TLuaClass; Method: TLuaClassMethod; Args: TLuaArgs; Results: TLuaResults);
+begin
+  Inc(FProxyMethodCount);
+  Results.PushStr('pong');
+end;
+
+procedure TLuaRegressionSuite.ProxyLifetimeRelease(Sender: TLua; Clazz: TLuaClass; var UserClass: TObject);
+begin
+  Inc(FProxyReleaseCount);
 end;
 
 procedure TLuaRegressionSuite.BaseSpeak(Sender: TLua; Clazz: TLuaClass; Method: TLuaClassMethod; Args: TLuaArgs; Results: TLuaResults);
@@ -678,6 +694,87 @@ begin
   end;
 end;
 
+procedure TLuaRegressionSuite.TestClassDestroyLifetime;
+const
+  ProxyCount = 24;
+var
+  I: Integer;
+  LuaState: TLua;
+  Blueprint: TLuaClassBlueprint;
+  Invoker: TLuaClassMethodInvoker;
+  Proxies: array[0..ProxyCount - 1] of TLuaClass;
+begin
+  FProxyMethodCount:=0;
+  FProxyReleaseCount:=0;
+  LuaState:=TLua.Create;
+  try
+    Blueprint:=LuaState.NewClass('LifetimeProxy');
+    Blueprint.AddMethod('ping', ProxyLifetimePing);
+    Blueprint.OnRelease:=ProxyLifetimeRelease;
+    Blueprint.Register;
+
+    for I:=0 to High(Proxies) do
+    begin
+      Proxies[I]:=Blueprint.Construct(Pointer(I + 1));
+      AssertTrue(Assigned(Proxies[I]), 'Construct should create native lifetime proxies.');
+      AssertTrue(Proxies[I].TryInvoke('ping', Invoker), 'Lifetime proxy method should resolve before destroy.');
+      try
+        AssertTrue(Invoker.Execute, 'Lifetime proxy method should execute before destroy.');
+        AssertEqual('pong', Invoker.Results[0].AsStr, 'Lifetime proxy method returned the wrong value.');
+      finally
+        Invoker.Free;
+      end;
+    end;
+
+    for I:=0 to High(Proxies) do
+    begin
+      Proxies[I].Free;
+      Proxies[I]:=nil;
+    end;
+
+    AssertEqual(ProxyCount, FProxyMethodCount, 'Every lifetime proxy should have executed its method before destroy.');
+    AssertEqual(ProxyCount, FProxyReleaseCount, 'Host-owned lifetime proxy destroy should release each proxy once.');
+  finally
+    LuaState.Free;
+  end;
+
+  FProxyMethodCount:=0;
+  FProxyReleaseCount:=0;
+  LuaState:=TLua.Create;
+  try
+    Blueprint:=LuaState.NewClass('LateLifetimeProxy');
+    Blueprint.AddMethod('ping', ProxyLifetimePing);
+    Blueprint.OnRelease:=ProxyLifetimeRelease;
+    Blueprint.Register;
+
+    for I:=0 to High(Proxies) do
+    begin
+      Proxies[I]:=Blueprint.Construct(Pointer(I + 1));
+      AssertTrue(Assigned(Proxies[I]), 'Construct should create late lifetime proxies.');
+      AssertTrue(Proxies[I].TryInvoke('ping', Invoker), 'Late lifetime proxy method should resolve before shutdown.');
+      try
+        AssertTrue(Invoker.Execute, 'Late lifetime proxy method should execute before shutdown.');
+      finally
+        Invoker.Free;
+      end;
+    end;
+
+    LuaState.Free;
+    LuaState:=nil;
+
+    for I:=0 to High(Proxies) do
+    begin
+      Proxies[I].Free;
+      Proxies[I]:=nil;
+    end;
+
+    AssertEqual(ProxyCount, FProxyMethodCount, 'Late lifetime proxies should execute before TLua shutdown.');
+    AssertEqual(ProxyCount, FProxyReleaseCount, 'Late lifetime proxies should release exactly once during shutdown.');
+  finally
+    LuaState.Free;
+  end;
+end;
+
 procedure TLuaRegressionSuite.Run;
 begin
   RunTest('Globals and ExecuteDirect', TestGlobalsAndExecuteDirect);
@@ -693,6 +790,7 @@ begin
   RunTest('Memory usage', TestMemoryUsage);
   RunTest('CopyTable', TestCopyTable);
   RunTest('Class blueprints', TestClassBlueprintBinding);
+  RunTest('Class destroy lifetime', TestClassDestroyLifetime);
 
   Writeln(Format('[PASS] %d assertions', [FAssertionCount]));
 end;

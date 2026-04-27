@@ -30,6 +30,7 @@ The `LUA_STATIC` variant validates the Win64 static-link path in `Source/LuaAPI.
 - allocator-backed memory growth via `MemoryUsage`
 - direct `CopyTable` regression coverage including nested tables, shared references, and cycles
 - class blueprints with property access, method calls, and construction callback wiring
+- native class proxy lifetime cleanup during bulk destroy and late destroy after `TLua.Free`
 
 ## Design
 
