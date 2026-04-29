@@ -1,4 +1,4 @@
-{***************************************************************************}
+﻿{***************************************************************************}
 {                                                                           }
 {       TLua - Lua Framework for Delphi                                     }
 {                                                                           }
@@ -42,7 +42,7 @@ unit Lua;
 interface
 
 uses
-  SysUtils, Variants, Classes, IniFiles, Generics.Collections, Contnrs, Types,
+  SysUtils, Variants, Classes, IniFiles, System.Generics.Collections, System.Contnrs, Types,
   LuaAPI, LuaCompat;
 
 const
@@ -139,7 +139,7 @@ type
     procedure SetGlobal(AName: String);
     function CheckState(ALua: TLua): Boolean;
     function CopyToRef: Integer;
-    function PushToStack: Integer;
+    function PushToStack: Integer; virtual;
     function Compare(AValue: TLuaObject; AOperation: TLuaCompareOperation): Boolean;
     property Lua: TLua       read FLua;
     property Typ: TLuaType   read GetTyp;
@@ -150,6 +150,7 @@ type
   TLuaValue = class(TLuaObject)
   strict private type
     LuaValueType = (lvtEmpty, lvtSimple, lvtPointer, lvtFunction, lvtBlueprint, lvtClass, lvtTable, lvtThread);
+    LuaSimpleType = (lstNone, lstBoolean, lstInteger, lstFloat, lstString);
     LuaValue = packed record
       V: Variant;
       case K: LuaValueType of
@@ -164,11 +165,18 @@ type
     end;
   private
     FValue: LuaValue;
+    FSimpleBool: Boolean;
+    FSimpleFloat: Double;
+    FSimpleInt: Int64;
+    FSimpleStr: String;
+    FSimpleTyp: LuaSimpleType;
   protected
     procedure Initialize; override;
+    procedure ResetSimpleValue;
     procedure UnRef; override;
     class function Clear(ALua: TLua): TLuaValue;
     class function New(ALua: TLua; AIndex: Integer): TLuaValue;
+    class function FromStackValue(ALua: TLua; AIndex: Integer): TLuaValue;
     class function Copy(AValue: TLuaValue): TLuaValue;
     class function FromRefId(ALua: TLua; ARefId: Integer): TLuaValue;
     class function FromValue(ALua: TLua; AValue: Int64): TLuaValue; overload;
@@ -212,6 +220,7 @@ type
     procedure Assign(Source: TPersistent); override;
     procedure SetClear;
     procedure SetNil;
+    function PushToStack: Integer; override;
     property IsSet: Boolean                   read GetIsSet;
     property IsNil: Boolean                   read GetIsNil;
     property IsStr: Boolean                   read GetIsStr;
@@ -406,8 +415,11 @@ type
     FName: String;
     FIsInherited: Boolean;
     FMethods: TList<MethodEntry>;
+    FMethodLookup: THashedStringList;
     FProperties: TList<PropertyEntry>;
+    FPropertyLookup: THashedStringList;
     FIndexProperties: TList<IndexPropertyEntry>;
+    FIndexPropertyLookup: THashedStringList;
     FAllowConstruct: Boolean;
     FInstances: TObjectList<TLuaClass>;
     FInheritances: TObjectList<TLuaClassBlueprint>;
@@ -442,7 +454,13 @@ type
     procedure AddOrReplaceMethod(AMethodEntry: MethodEntry);
     procedure AddOrReplaceProperty(APropertyEntry: PropertyEntry);
     procedure AddOrReplaceIndexProperty(AIndexPropertyEntry: IndexPropertyEntry);
+    procedure RebuildMethodLookup;
+    procedure RebuildPropertyLookup;
+    procedure RebuildIndexPropertyLookup;
     // Internal stuff
+    function FindMethodIndex(AName: String): Integer;
+    function FindPropertyIndex(AName: String): Integer;
+    function FindIndexPropertyIndex(AName: String): Integer;
     function GetMethod(AName: String; var AMethod: MethodEntry): Boolean;
     function NewMethodInvoker(AMethodName: String; AClass: TLuaClass): TLuaClassMethodInvoker;
     // Lua callbacks
@@ -535,11 +553,14 @@ type
       N: String;
       C: TLuaClass;
       case T: TLuaCallType of
-        mtNative: (E: TLuaClassMethodEvent; F: TLuaCallbackHandle);
+        mtNative: (E: TLuaClassMethodEvent);
         mtLua: (R: Integer);
     end;
   private
     FInvoker: InvokerData;
+    FNativeArgs: TLuaArgs;
+    FNativeMethod: TLuaClassMethod;
+    FNativeResults: TLuaResults;
   protected
     class function NewLua(AMethodName: String; AClass: TLuaClass; ARefId: Integer): TLuaClassMethodInvoker;
     class function NewNative(AMethodName: String; AClass: TLuaClass; ACallback: TLuaClassMethodEvent): TLuaClassMethodInvoker;
@@ -609,6 +630,7 @@ type
     FCleanupList: TObjectList;
     FErrorHandlers: TInterfaceList;
     FClassBlueprints: TObjectList<TLuaClassBlueprint>;
+    FClassBlueprintLookup: THashedStringList;
     FClassInheritor: TLuaClassInheritor;
     FFunctions: THashedStringList;
     function GetScriptText: String;
@@ -909,6 +931,94 @@ begin
     Dec(Lua.FMemoryUsage, osize);
     Inc(Lua.FMemoryUsage, nsize);
   end;
+end;
+
+function CloneLuaValueForLua(ALua: TLua; AValue: TLuaValue): TLuaValue;
+begin
+  if Assigned(AValue) then
+  begin
+    if (AValue.Lua.GetRefOwner = ALua.GetRefOwner) AND (AValue.RefId <> LUA_NOREF) AND (AValue.RefId <> LUA_REFNIL) then
+    begin
+      Result:=TLuaValue.FromRefId(ALua, AValue.RefId);
+    end else
+    begin
+      case AValue.Typ of
+        ltNone,
+        ltNil:
+        begin
+          Result:=TLuaValue.Clear(ALua);
+          Result.SetNil;
+        end;
+        ltBoolean:
+        begin
+          Result:=TLuaValue.FromValue(ALua, AValue.AsBool);
+        end;
+        ltNumber:
+        begin
+          if AValue.IsInt then
+            Result:=TLuaValue.FromValue(ALua, AValue.AsInt)
+          else
+            Result:=TLuaValue.FromValue(ALua, AValue.AsFloat);
+        end;
+        ltString:
+        begin
+          Result:=TLuaValue.FromValue(ALua, AValue.AsStr);
+        end;
+        ltLightUserdata,
+        ltUserdata:
+        begin
+          Result:=TLuaValue.FromValue(ALua, AValue.AsPtr);
+        end;
+        else
+        begin
+          raise ELuaException.Create('Cannot forward complex values across unrelated Lua states.');
+        end;
+      end;
+    end;
+  end else
+  begin
+    Result:=TLuaValue.Clear(ALua);
+    Result.SetNil;
+  end;
+end;
+
+procedure CopyLuaResultValues(ASource: TLuaResults; ADest: TLuaArgs); overload;
+var
+  I: Integer;
+begin
+  ADest.FValues.Clear;
+  ADest.FCount:=ASource.Count;
+
+  for I:=0 to ASource.Count - 1 do
+  begin
+    ADest.FValues.Add(CloneLuaValueForLua(ADest.FLua, ASource.FValues[I]));
+  end;
+end;
+
+procedure CopyLuaResultValues(ASource: TLuaResults; ADest: TLuaFunctionResults); overload;
+var
+  I: Integer;
+begin
+  ADest.FValues.Clear;
+  ADest.FCount:=ASource.Count;
+
+  for I:=0 to ASource.Count - 1 do
+  begin
+    ADest.FValues.Add(CloneLuaValueForLua(ADest.FLua, ASource.FValues[I]));
+  end;
+end;
+
+function EncodeLookupIndex(AIndex: Integer): TObject; inline;
+begin
+  Result:=TObject(NativeInt(AIndex) + 1);
+end;
+
+function DecodeLookupIndex(AObject: TObject): NativeUInt; inline;
+var
+  DecodedIndex: NativeInt;
+begin
+  DecodedIndex:=NativeInt(AObject) - 1;
+  Result:=DecodedIndex;
 end;
 
 { TLuaInternalCore }
@@ -1668,6 +1778,44 @@ begin
   Result:=TLuaValue.Create(ALua, oaStackIndex, AIndex);
 end;
 
+class function TLuaValue.FromStackValue(ALua: TLua; AIndex: Integer): TLuaValue;
+begin
+  case ALua.Stack.Typ(AIndex) of
+    LUA_TNONE:
+    begin
+      Result:=TLuaValue.Clear(ALua);
+    end;
+    LUA_TNIL:
+    begin
+      Result:=TLuaValue.Clear(ALua);
+      Result.SetNil;
+    end;
+    LUA_TBOOLEAN:
+    begin
+      Result:=TLuaValue.FromValue(ALua, ALua.Stack.ToBoolean(AIndex));
+    end;
+    LUA_TLIGHTUSERDATA:
+    begin
+      Result:=TLuaValue.FromValue(ALua, ALua.Stack.ToPointer(AIndex));
+    end;
+    LUA_TNUMBER:
+    begin
+      if ALua.Stack.IsInteger(AIndex) then
+        Result:=TLuaValue.FromValue(ALua, ALua.Stack.ToInteger(AIndex))
+      else
+        Result:=TLuaValue.FromValue(ALua, ALua.Stack.ToNumber(AIndex));
+    end;
+    LUA_TSTRING:
+    begin
+      Result:=TLuaValue.FromValue(ALua, ALua.Stack.ToString(AIndex));
+    end;
+    else
+    begin
+      Result:=TLuaValue.New(ALua, AIndex);
+    end;
+  end;
+end;
+
 class function TLuaValue.Clear(ALua: TLua): TLuaValue;
 begin
   Result:=TLuaValue.Create(ALua, oaNone);
@@ -1721,7 +1869,21 @@ begin
   if Source IS TLuaValue then
   begin
     FValue:=TLuaValue(Source).FValue;
+    FSimpleBool:=TLuaValue(Source).FSimpleBool;
+    FSimpleFloat:=TLuaValue(Source).FSimpleFloat;
+    FSimpleInt:=TLuaValue(Source).FSimpleInt;
+    FSimpleStr:=TLuaValue(Source).FSimpleStr;
+    FSimpleTyp:=TLuaValue(Source).FSimpleTyp;
   end;
+end;
+
+procedure TLuaValue.ResetSimpleValue;
+begin
+  FSimpleBool:=False;
+  FSimpleFloat:=0.0;
+  FSimpleInt:=0;
+  FSimpleStr:='';
+  FSimpleTyp:=lstNone;
 end;
 
 procedure TLuaValue.SetClear;
@@ -1734,6 +1896,7 @@ begin
   UnRef;
 
   FValue.V:=Null;
+  ResetSimpleValue;
   FTyp:=LUA_TNIL;
 end;
 
@@ -1749,6 +1912,7 @@ begin
   FValue.V:=Unassigned;
   FValue.K:=lvtEmpty;
   FValue.X:=0;
+  ResetSimpleValue;
 
   // Continue
   inherited;
@@ -1765,11 +1929,13 @@ end;
 
 procedure TLuaValue.SetAsBool(const Value: Boolean);
 begin
-  FLua.Stack.PushBoolean(Value);
-  FromStack(-1);
-  PopFromStack;
-
-  Initialize;
+  UnRef;
+  FTyp:=LUA_TBOOLEAN;
+  FValue.K:=lvtSimple;
+  FValue.V:=Unassigned;
+  ResetSimpleValue;
+  FSimpleTyp:=lstBoolean;
+  FSimpleBool:=Value;
 end;
 
 procedure TLuaValue.SetAsClass(const Value: TLuaClass);
@@ -1783,11 +1949,13 @@ end;
 
 procedure TLuaValue.SetAsFloat(const Value: Double);
 begin
-  FLua.Stack.PushNumber(Value);
-  FromStack(-1);
-  PopFromStack;
-
-  Initialize;
+  UnRef;
+  FTyp:=LUA_TNUMBER;
+  FValue.K:=lvtSimple;
+  FValue.V:=Unassigned;
+  ResetSimpleValue;
+  FSimpleTyp:=lstFloat;
+  FSimpleFloat:=Value;
 end;
 
 procedure TLuaValue.SetAsFunc(const Value: TLuaFunction);
@@ -1801,29 +1969,33 @@ end;
 
 procedure TLuaValue.SetAsInt(const Value: Int64);
 begin
-  FLua.Stack.PushInteger(Value);
-  FromStack(-1);
-  PopFromStack;
-
-  Initialize;
+  UnRef;
+  FTyp:=LUA_TNUMBER;
+  FValue.K:=lvtSimple;
+  FValue.V:=Unassigned;
+  ResetSimpleValue;
+  FSimpleTyp:=lstInteger;
+  FSimpleInt:=Value;
 end;
 
 procedure TLuaValue.SetAsPtr(const Value: Pointer);
 begin
-  FLua.Stack.PushPointer(Value);
-  FromStack(-1);
-  PopFromStack;
-
-  Initialize;
+  UnRef;
+  FTyp:=LUA_TLIGHTUSERDATA;
+  FValue.K:=lvtPointer;
+  FValue.P:=Value;
+  ResetSimpleValue;
 end;
 
 procedure TLuaValue.SetAsStr(const Value: String);
 begin
-  FLua.Stack.PushString(Value);
-  FromStack(-1);
-  PopFromStack;
-
-  Initialize;
+  UnRef;
+  FTyp:=LUA_TSTRING;
+  FValue.K:=lvtSimple;
+  FValue.V:=Unassigned;
+  ResetSimpleValue;
+  FSimpleTyp:=lstString;
+  FSimpleStr:=Value;
 end;
 
 procedure TLuaValue.SetAsTable(const Value: TLuaTable);
@@ -1836,12 +2008,58 @@ begin
 end;
 
 procedure TLuaValue.SetAsVariant(const Value: Variant);
+var
+  ValueType: Integer;
 begin
-  FLua.Stack.PushVariant(Value);
-  FromStack(-1);
-  PopFromStack;
+  ValueType:=VarType(Value) AND varTypeMask;
 
-  Initialize;
+  if VarIsNull(Value) then
+  begin
+    SetNil;
+  end else
+  if VarIsEmpty(Value) then
+  begin
+    SetClear;
+  end else
+  begin
+    case ValueType of
+      varBoolean:
+      begin
+        SetAsBool(Value);
+      end;
+      varByte,
+      varSmallint,
+      varInteger,
+      varShortInt,
+      varWord,
+      varLongWord,
+      varInt64:
+      begin
+        SetAsInt(Value);
+      end;
+      varSingle,
+      varDouble,
+      varCurrency:
+      begin
+        SetAsFloat(Value);
+      end;
+      varOleStr,
+      varStrArg,
+      varString,
+      varUString:
+      begin
+        SetAsStr(Value);
+      end;
+      else
+      begin
+        FLua.Stack.PushVariant(Value);
+        FromStack(-1);
+        PopFromStack;
+
+        Initialize;
+      end;
+    end;
+  end;
 end;
 
 procedure TLuaValue.Initialize;
@@ -1849,6 +2067,7 @@ begin
   PushToStack;
 
   FValue.X:=0;
+  ResetSimpleValue;
 
   case FTyp of
     LUA_TNONE,
@@ -1860,7 +2079,8 @@ begin
     LUA_TBOOLEAN:
     begin
       FValue.K:=lvtSimple;
-      FValue.V:=FLua.Stack.ToBoolean(-1);
+      FSimpleTyp:=lstBoolean;
+      FSimpleBool:=FLua.Stack.ToBoolean(-1);
     end;
     LUA_TLIGHTUSERDATA:
     begin
@@ -1872,17 +2092,20 @@ begin
       if FLua.Stack.IsInteger(-1) then
       begin
         FValue.K:=lvtSimple;
-        FValue.V:=VarAsType(FLua.Stack.ToInteger(-1), varInt64);
+        FSimpleTyp:=lstInteger;
+        FSimpleInt:=FLua.Stack.ToInteger(-1);
       end else
       begin
         FValue.K:=lvtSimple;
-        FValue.V:=VarAsType(FLua.Stack.ToNumber(-1), varDouble);
+        FSimpleTyp:=lstFloat;
+        FSimpleFloat:=FLua.Stack.ToNumber(-1);
       end;
     end;
     LUA_TSTRING:
     begin
       FValue.K:=lvtSimple;
-      FValue.V:=FLua.Stack.ToString(-1);
+      FSimpleTyp:=lstString;
+      FSimpleStr:=FLua.Stack.ToString(-1);
     end;
     LUA_TTABLE:
     begin
@@ -1924,6 +2147,43 @@ begin
   PopFromStack;
 end;
 
+function TLuaValue.PushToStack: Integer;
+begin
+  if (RefId <> LUA_NOREF) AND (RefId <> LUA_REFNIL) then
+  begin
+    Result:=inherited PushToStack;
+  end else
+  begin
+    case FValue.K of
+      lvtSimple:
+      begin
+        case FSimpleTyp of
+          lstBoolean:
+            FLua.Stack.PushBoolean(FSimpleBool);
+          lstInteger:
+            FLua.Stack.PushInteger(FSimpleInt);
+          lstFloat:
+            FLua.Stack.PushNumber(FSimpleFloat);
+          lstString:
+            FLua.Stack.PushString(FSimpleStr);
+          else
+            FLua.Stack.PushNil;
+        end;
+      end;
+      lvtPointer:
+      begin
+        FLua.Stack.PushPointer(FValue.P);
+      end;
+      else
+      begin
+        FLua.Stack.PushNil;
+      end;
+    end;
+
+    Result:=FLua.Stack.Top;
+  end;
+end;
+
 function TLuaValue.GetAsBlueprint: TLuaClassBlueprint;
 begin
   if FValue.K = lvtBlueprint then
@@ -1934,8 +2194,8 @@ end;
 
 function TLuaValue.GetAsBool: Boolean;
 begin
-  if FValue.K = lvtSimple then
-    Result:=VarAsType(FValue.V, varBoolean)
+  if FSimpleTyp = lstBoolean then
+    Result:=FSimpleBool
   else
     Result:=False;
 end;
@@ -1950,8 +2210,10 @@ end;
 
 function TLuaValue.GetAsFloat: Double;
 begin
-  if FValue.K = lvtSimple then
-    Result:=VarAsType(FValue.V, varDouble)
+  if FSimpleTyp = lstFloat then
+    Result:=FSimpleFloat
+  else if FSimpleTyp = lstInteger then
+    Result:=FSimpleInt
   else
     Result:=0.0;
 end;
@@ -1966,8 +2228,10 @@ end;
 
 function TLuaValue.GetAsInt: Int64;
 begin
-  if FValue.K = lvtSimple then
-    Result:=VarAsType(FValue.V, varInt64)
+  if FSimpleTyp = lstInteger then
+    Result:=FSimpleInt
+  else if FSimpleTyp = lstFloat then
+    Result:=Trunc(FSimpleFloat)
   else
     Result:=0;
 end;
@@ -1984,8 +2248,14 @@ function TLuaValue.GetAsStr: String;
 begin
   Result:='';
 
-  if FValue.K = lvtSimple then
-    Result:=VarToStrDef(FValue.V, '')
+  if FSimpleTyp = lstString then
+    Result:=FSimpleStr
+  else if FSimpleTyp = lstBoolean then
+    Result:=BoolToStr(FSimpleBool, True)
+  else if FSimpleTyp = lstInteger then
+    Result:=IntToStr(FSimpleInt)
+  else if FSimpleTyp = lstFloat then
+    Result:=FloatToStr(FSimpleFloat)
   else
     case FValue.K of
       lvtPointer   : Result:='0x' + IntToHex(NativeInt(FValue.P), SizeOf(NativeInt) * 2);
@@ -2009,9 +2279,21 @@ function TLuaValue.GetAsVariant: Variant;
 begin
   Result:=Unassigned;
 
-  if FValue.K = lvtSimple then
+  if FSimpleTyp = lstBoolean then
   begin
-    Result:=FValue.V;
+    Result:=FSimpleBool;
+  end else
+  if FSimpleTyp = lstInteger then
+  begin
+    Result:=FSimpleInt;
+  end else
+  if FSimpleTyp = lstFloat then
+  begin
+    Result:=FSimpleFloat;
+  end else
+  if FSimpleTyp = lstString then
+  begin
+    Result:=FSimpleStr;
   end;
 end;
 
@@ -2032,7 +2314,7 @@ end;
 
 function TLuaValue.GetIsFloat: Boolean;
 begin
-  Result:=(FTyp = LUA_TNUMBER) AND (VarType(FValue.V) = varDouble);
+  Result:=FSimpleTyp = lstFloat;
 end;
 
 function TLuaValue.GetIsFunc: Boolean;
@@ -2042,7 +2324,7 @@ end;
 
 function TLuaValue.GetIsInt: Boolean;
 begin
-  Result:=(FTyp = LUA_TNUMBER) AND (VarType(FValue.V) = varInt64);
+  Result:=FSimpleTyp = lstInteger;
 end;
 
 function TLuaValue.GetIsNil: Boolean;
@@ -2062,7 +2344,7 @@ end;
 
 function TLuaValue.GetIsStr: Boolean;
 begin
-  Result:=FTyp = LUA_TSTRING;
+  Result:=FSimpleTyp = lstString;
 end;
 
 function TLuaValue.GetIsTable: Boolean;
@@ -2892,7 +3174,7 @@ begin
   // Manual fetch results
   for I:=FResults.FCount - 1 downto 0 do
   begin
-    FResults.FValues.Add(TLuaValue.New(FLua, -(I + 1)));
+    FResults.FValues.Add(TLuaValue.FromStackValue(FLua, -(I + 1)));
   end;
 
   // Remove the results from the stack
@@ -2995,6 +3277,9 @@ destructor TLuaClassBlueprint.Destroy;
 begin
   Finalize;
 
+  FreeAndNil(FIndexPropertyLookup);
+  FreeAndNil(FPropertyLookup);
+  FreeAndNil(FMethodLookup);
   FreeAndNil(FInheritances);
   FreeAndNil(FInstances);
   FreeAndNil(FIndexProperties);
@@ -3013,11 +3298,21 @@ procedure TLuaClassBlueprint.Initialize;
 begin
   // Create all the good stuff
   FMethods:=TList<MethodEntry>.Create;
+  FMethodLookup:=THashedStringList.Create;
   FProperties:=TList<PropertyEntry>.Create;
+  FPropertyLookup:=THashedStringList.Create;
   FIndexProperties:=TList<IndexPropertyEntry>.Create;
+  FIndexPropertyLookup:=THashedStringList.Create;
   FInstances:=TObjectList<TLuaClass>.Create;
   FInheritances:=TObjectList<TLuaClassBlueprint>.Create;
   FInstances.OwnsObjects:=False;
+
+  FMethodLookup.CaseSensitive:=False;
+  FMethodLookup.Duplicates:=dupIgnore;
+  FPropertyLookup.CaseSensitive:=False;
+  FPropertyLookup.Duplicates:=dupIgnore;
+  FIndexPropertyLookup.CaseSensitive:=False;
+  FIndexPropertyLookup.Duplicates:=dupIgnore;
 
   // Properties
   FLuaIndexHandler:=TLuaCallbackWrapper.New(LuaIndexHandler, LuaNewIndexHandler).Callback;
@@ -3137,20 +3432,92 @@ begin
   end;
 end;
 
-function TLuaClassBlueprint.GetMethod(AName: String; var AMethod: MethodEntry): Boolean;
+procedure TLuaClassBlueprint.RebuildMethodLookup;
 var
   I: Integer;
 begin
-  Result:=False;
+  FMethodLookup.Clear;
 
   for I:=0 to FMethods.Count - 1 do
   begin
-    if AnsiSameText(AName, FMethods[I].N) then
-    begin
-      Result:=True;
-      AMethod:=FMethods[I];
-      Break;
-    end;
+    FMethodLookup.AddObject(FMethods[I].N, EncodeLookupIndex(I));
+  end;
+end;
+
+procedure TLuaClassBlueprint.RebuildPropertyLookup;
+var
+  I: Integer;
+begin
+  FPropertyLookup.Clear;
+
+  for I:=0 to FProperties.Count - 1 do
+  begin
+    FPropertyLookup.AddObject(FProperties[I].N, EncodeLookupIndex(I));
+  end;
+end;
+
+procedure TLuaClassBlueprint.RebuildIndexPropertyLookup;
+var
+  I: Integer;
+begin
+  FIndexPropertyLookup.Clear;
+
+  for I:=0 to FIndexProperties.Count - 1 do
+  begin
+    FIndexPropertyLookup.AddObject(FIndexProperties[I].N, EncodeLookupIndex(I));
+  end;
+end;
+
+function TLuaClassBlueprint.FindMethodIndex(AName: String): Integer;
+var
+  LookupIndex: Integer;
+begin
+  Result:=-1;
+  LookupIndex:=FMethodLookup.IndexOf(AName);
+
+  if LookupIndex >= 0 then
+  begin
+    Result:=Integer(DecodeLookupIndex(FMethodLookup.Objects[LookupIndex]));
+  end;
+end;
+
+function TLuaClassBlueprint.FindPropertyIndex(AName: String): Integer;
+var
+  LookupIndex: Integer;
+begin
+  Result:=-1;
+  LookupIndex:=FPropertyLookup.IndexOf(AName);
+
+  if LookupIndex >= 0 then
+  begin
+    Result:=Integer(DecodeLookupIndex(FPropertyLookup.Objects[LookupIndex]));
+  end;
+end;
+
+function TLuaClassBlueprint.FindIndexPropertyIndex(AName: String): Integer;
+var
+  LookupIndex: Integer;
+begin
+  Result:=-1;
+  LookupIndex:=FIndexPropertyLookup.IndexOf(AName);
+
+  if LookupIndex >= 0 then
+  begin
+    Result:=Integer(DecodeLookupIndex(FIndexPropertyLookup.Objects[LookupIndex]));
+  end;
+end;
+
+function TLuaClassBlueprint.GetMethod(AName: String; var AMethod: MethodEntry): Boolean;
+var
+  MethodIndex: Integer;
+begin
+  Result:=False;
+  MethodIndex:=FindMethodIndex(AName);
+
+  if MethodIndex >= 0 then
+  begin
+    Result:=True;
+    AMethod:=FMethods[MethodIndex];
   end;
 end;
 
@@ -3190,50 +3557,13 @@ begin
 end;
 
 function TLuaClassBlueprint.HasMethod(AName: String): Boolean;
-var
-  I: Integer;
 begin
-  Result:=False;
-
-  for I:=0 to FMethods.Count - 1 do
-  begin
-    if AnsiSameText(FMethods[I].N, AName) then
-    begin
-      Result:=True;
-
-      Break;
-    end;
-  end;
+  Result:=FindMethodIndex(AName) >= 0;
 end;
 
 function TLuaClassBlueprint.HasProperty(AName: String): Boolean;
-var
-  I: Integer;
 begin
-  Result:=False;
-
-  try
-    for I:=0 to FProperties.Count - 1 do
-    begin
-      if AnsiSameText(FProperties[I].N, AName) then
-      begin
-        Result:=True;
-
-        Abort;
-      end;
-    end;
-
-    for I:=0 to FIndexProperties.Count - 1 do
-    begin
-      if AnsiSameText(FIndexProperties[I].N, AName) then
-      begin
-        Result:=True;
-
-        Abort;
-      end;
-    end;
-  except
-  end;
+  Result:=(FindPropertyIndex(AName) >= 0) OR (FindIndexPropertyIndex(AName) >= 0);
 end;
 
 function TLuaClassBlueprint.Inherit(AName: String = ''): TLuaClassBlueprint;
@@ -3312,6 +3642,8 @@ begin
   begin
     FIndexProperties.Add(Source);
   end;
+
+  RebuildIndexPropertyLookup;
 end;
 
 procedure TLuaClassBlueprint.CopyMethods(ASource: TList<MethodEntry>);
@@ -3322,6 +3654,8 @@ begin
   begin
     FMethods.Add(Source);
   end;
+
+  RebuildMethodLookup;
 end;
 
 procedure TLuaClassBlueprint.CopyProperties(ASource: TList<PropertyEntry>);
@@ -3332,6 +3666,8 @@ begin
   begin
     FProperties.Add(Source);
   end;
+
+  RebuildPropertyLookup;
 end;
 
 procedure TLuaClassBlueprint.LuaCallHandler(Sender: TLua; Blueprint: TLuaClassBlueprint; Args: TLuaArgs; var UserClass: TObject; var Allow: Boolean);
@@ -3490,62 +3826,53 @@ end;
 
 procedure TLuaClassBlueprint.AddOrReplaceIndexProperty(AIndexPropertyEntry: IndexPropertyEntry);
 var
-  I: Integer;
+  IndexPropertyIndex: Integer;
 begin
-  try
-    for I:=0 to FIndexProperties.Count - 1 do
-    begin
-      if AnsiSameText(FIndexProperties[I].N, AIndexPropertyEntry.N) then
-      begin
-        FIndexProperties[I]:=AIndexPropertyEntry;
+  IndexPropertyIndex:=FindIndexPropertyIndex(AIndexPropertyEntry.N);
 
-        Abort;
-      end;
-    end;
-
+  if IndexPropertyIndex >= 0 then
+  begin
+    FIndexProperties[IndexPropertyIndex]:=AIndexPropertyEntry;
+  end else
+  begin
     FIndexProperties.Add(AIndexPropertyEntry);
-  except
   end;
+
+  RebuildIndexPropertyLookup;
 end;
 
 procedure TLuaClassBlueprint.AddOrReplaceMethod(AMethodEntry: MethodEntry);
 var
-  I: Integer;
+  MethodIndex: Integer;
 begin
-  try
-    for I:=0 to FMethods.Count - 1 do
-    begin
-      if AnsiSameText(FMethods[I].N, AMethodEntry.N) then
-      begin
-        FMethods[I]:=AMethodEntry;
+  MethodIndex:=FindMethodIndex(AMethodEntry.N);
 
-        Abort;
-      end;
-    end;
-
+  if MethodIndex >= 0 then
+  begin
+    FMethods[MethodIndex]:=AMethodEntry;
+  end else
+  begin
     FMethods.Add(AMethodEntry);
-  except
   end;
+
+  RebuildMethodLookup;
 end;
 
 procedure TLuaClassBlueprint.AddOrReplaceProperty(APropertyEntry: PropertyEntry);
 var
-  I: Integer;
+  PropertyIndex: Integer;
 begin
-  try
-    for I:=0 to FProperties.Count - 1 do
-    begin
-      if AnsiSameText(FProperties[I].N, APropertyEntry.N) then
-      begin
-        FProperties[I]:=APropertyEntry;
+  PropertyIndex:=FindPropertyIndex(APropertyEntry.N);
 
-        Abort;
-      end;
-    end;
-
+  if PropertyIndex >= 0 then
+  begin
+    FProperties[PropertyIndex]:=APropertyEntry;
+  end else
+  begin
     FProperties.Add(APropertyEntry);
-  except
   end;
+
+  RebuildPropertyLookup;
 end;
 
 procedure TLuaClassBlueprint.AddProperty(AName: String; AGet, ASet: TLuaClassPropertyEvent);
@@ -3575,6 +3902,7 @@ begin
   if (AIndex >= 0) AND (AIndex < FIndexProperties.Count) then
   begin
     FIndexProperties.Delete(AIndex);
+    RebuildIndexPropertyLookup;
   end;
 end;
 
@@ -3583,6 +3911,7 @@ begin
   if (AIndex >= 0) AND (AIndex < FMethods.Count) then
   begin
     FMethods.Delete(AIndex);
+    RebuildMethodLookup;
   end;
 end;
 
@@ -3591,6 +3920,7 @@ begin
   if (AIndex >= 0) AND (AIndex < FProperties.Count) then
   begin
     FProperties.Delete(AIndex);
+    RebuildPropertyLookup;
   end;
 end;
 
@@ -3600,9 +3930,9 @@ destructor TLuaClass.Destroy;
 var
   I: Integer;
 begin
-  DetachFromBlueprintLifetime;
-  ReleaseCleanup;
-  DetachCallbackHandlers;
+  DetachFromLuaRuntime;
+
+  FreeAndNil(FCleanupList);
 
   try
     for I:=0 to FIndexProperties.Count - 1 do
@@ -3631,7 +3961,6 @@ begin
     FreeAndNil(FMethods);
   end;
 
-  FreeAndNil(FCleanupList);
   FBlueprint:=nil;
   FIsDetached:=True;
 
@@ -4122,11 +4451,9 @@ begin
     FInvoker.C:=AClass;
     FInvoker.T:=mtNative;
     FInvoker.E:=ACallback;
-    FInvoker.F:=TLuaCallbackWrapper.New(LuaInvokeHandler).Callback;
-
-    FLua.Stack.PushFunction(FInvoker.F);
-    FromStack(-1);
-    PopFromStack;
+    FNativeMethod:=TLuaClassMethod.Create(AClass, AMethodName, ACallback);
+    FNativeArgs:=TLuaArgs.Create(AClass.Lua, 0);
+    FNativeResults:=TLuaResults.Create(AClass.Lua);
   end;
 end;
 
@@ -4157,68 +4484,75 @@ begin
   Res:=0;
   Result:=False;
   FLua.ClearLastError;
-  TopBefore:=FLua.Stack.Top;
 
-  // **                                            ** //
-  // Do we need all this shit if it is a native call? //
-  // **                                            ** //
-
-  // Push the function to stack
-  PushToStack;
-
-  // Push the class table to stack
-  FInvoker.C.PushToStack;
-
-  // Push the args to the stack
-  FArgs.ApplyToStack;
-
-  try
-    // Execute the function
-    Res:=FLua.Stack.PCall(FArgs.Count + 1, LUA_MULTRET, 0);
-    case Res of
-      LUA_ERRRUN: raise ELuaExecuteException.Create('Runtime error');
-      LUA_ERRMEM: raise ELuaExecuteException.Create('Memory allocation error');
-      LUA_ERRSYNTAX: raise ELuaExecuteException.Create('Syntax error');
-      LUA_ERRERR: raise ELuaExecuteException.Create('Error handling function failed');
-    end;
-
-    // Set result
-    Result:=Res = LUA_OK;
-  except
-    on E: ELuaException do
-    begin
-      // Set exception props
-      E.FName:=FInvoker.C.Blueprint.Name + ':' + FInvoker.N;
-      E.FCode:=Res;
-      E.FLuaMessage:=FLua.Stack.ToString(-1);
-
-      // Handle the error
-      FLua.HandleLuaError(E);
-
-      // Pop the message from stack
-      FLua.Stack.Pop;
-    end;
-  end;
-
-  // Clear previous results
-  FResults.Update(0);
-
-  // Fetch new results from the stack
-  FResults.FCount:=Abs(FLua.Stack.Top - TopBefore);
-  for I:=FResults.FCount - 1 downto 0 do
+  if FInvoker.T = mtNative then
   begin
-    FResults.FValues.Add(TLuaValue.New(FLua, -(I + 1)));
-  end;
+    CopyLuaResultValues(FArgs, FNativeArgs);
+    FNativeResults.Clear;
 
-  FLua.Stack.Pop(FResults.FCount);
+    FInvoker.E(FLua, FInvoker.C, FNativeMethod, FNativeArgs, FNativeResults);
+
+    FResults.FValues.Clear;
+    CopyLuaResultValues(FNativeResults, FResults);
+    Result:=True;
+  end else
+  begin
+    TopBefore:=FLua.Stack.Top;
+
+    // Push the function to stack
+    PushToStack;
+
+    // Push the class table to stack
+    FInvoker.C.PushToStack;
+
+    // Push the args to the stack
+    FArgs.ApplyToStack;
+
+    try
+      // Execute the function
+      Res:=FLua.Stack.PCall(FArgs.Count + 1, LUA_MULTRET, 0);
+      case Res of
+        LUA_ERRRUN: raise ELuaExecuteException.Create('Runtime error');
+        LUA_ERRMEM: raise ELuaExecuteException.Create('Memory allocation error');
+        LUA_ERRSYNTAX: raise ELuaExecuteException.Create('Syntax error');
+        LUA_ERRERR: raise ELuaExecuteException.Create('Error handling function failed');
+      end;
+
+      // Set result
+      Result:=Res = LUA_OK;
+    except
+      on E: ELuaException do
+      begin
+        // Set exception props
+        E.FName:=FInvoker.C.Blueprint.Name + ':' + FInvoker.N;
+        E.FCode:=Res;
+        E.FLuaMessage:=FLua.Stack.ToString(-1);
+
+        // Handle the error
+        FLua.HandleLuaError(E);
+
+        // Pop the message from stack
+        FLua.Stack.Pop;
+      end;
+    end;
+
+    FResults.Update(0);
+
+    FResults.FCount:=Abs(FLua.Stack.Top - TopBefore);
+    for I:=FResults.FCount - 1 downto 0 do
+    begin
+      FResults.FValues.Add(TLuaValue.FromStackValue(FLua, -(I + 1)));
+    end;
+
+    FLua.Stack.Pop(FResults.FCount);
+  end;
 end;
 
 destructor TLuaClassMethodInvoker.Destroy;
 begin
-  if FInvoker.T = mtNative then
-  begin
-    TLuaCallbackWrapper.Release(FInvoker.F);
-  end;
+  FreeAndNil(FNativeResults);
+  FreeAndNil(FNativeArgs);
+  FreeAndNil(FNativeMethod);
 
   inherited;
 end;
@@ -4483,6 +4817,7 @@ begin
   FScriptSource:=TStringList.Create;
   FClassInheritor:=TLuaClassInheritor.Create(Self);
   FClassBlueprints:=TObjectList<TLuaClassBlueprint>.Create;
+  FClassBlueprintLookup:=TLuaPlatform.NewHashedStringList(dupIgnore, False);
   FErrorHandlers:=TInterfaceList.Create;
   FFunctions:=TLuaPlatform.NewHashedStringList(dupError, False);
   ClearLastError;
@@ -4515,6 +4850,7 @@ begin
   FStack:=TLuaStack.Create(AState);
   FClassInheritor:=TLuaClassInheritor.Create(Self);
   FClassBlueprints:=TObjectList<TLuaClassBlueprint>.Create;
+  FClassBlueprintLookup:=TLuaPlatform.NewHashedStringList(dupIgnore, False);
   FErrorHandlers:=TInterfaceList.Create;
   FFunctions:=THashedStringList.Create;
   ClearLastError;
@@ -4541,6 +4877,7 @@ begin
   // Free objects that depend on the state
   FreeAndNil(FCleanupList);
   FreeAndNil(FClassInheritor);
+  FreeAndNil(FClassBlueprintLookup);
   FreeAndNil(FClassBlueprints);
   FreeAndNil(FFunctions);
 
@@ -4584,17 +4921,12 @@ end;
 
 function TLua.GetClasses(AName: String): TLuaClassBlueprint;
 var
-  I: Integer;
+  Idx: Integer;
 begin
   Result:=nil;
-
-  for I:=0 to FClassBlueprints.Count - 1 do
-  begin
-    if AnsiSameText(FClassBlueprints[I].FName, AName) then
-    begin
-      Exit(FClassBlueprints[I]);
-    end;
-  end;
+  Idx:=FClassBlueprintLookup.IndexOf(AName);
+  if Idx >= 0 then
+    Result:=TLuaClassBlueprint(FClassBlueprintLookup.Objects[Idx]);
 end;
 
 class function TLua.Volatile(AState: TLuaState): TLua;
@@ -4810,6 +5142,8 @@ begin
     Result:=TLuaClassBlueprint.Create(Self, AName);
   finally
     FClassBlueprints.Add(Result);
+    if FClassBlueprintLookup.IndexOf(AName) < 0 then
+      FClassBlueprintLookup.AddObject(AName, Result);
   end;
 end;
 
@@ -5508,25 +5842,34 @@ end;
 procedure TLuaArgs.GetArgs;
 var
   I: Integer;
+  TopBefore: Integer;
 begin
+  TopBefore:=FLua.Stack.Top;
+
   if FCount >= 0 then
   begin
-    FCount:=Min(FCount, FLua.Stack.Top);
+    FCount:=Min(FCount, TopBefore);
   end else
   begin
-    FCount:=FLua.Stack.Top;
+    FCount:=TopBefore;
+  end;
+
+  if FValues.Capacity < FCount then
+  begin
+    FValues.Capacity:=FCount;
   end;
 
   for I:=1 to FCount do
   begin
-    FValues.Add(TLuaValue.New(FLua, I));
-    if FCount <> FLua.Stack.Top then
-    begin
-      raise ELuaExecuteException.Create(
-        'Stack manipulation error triggered, was ' + IntToStr(FCount) + ' now is ' +
-        IntToStr(FLua.Stack.Top) + '.'#13#10'Inconsistent data, abort!'
-      );
-    end;
+    FValues.Add(TLuaValue.FromStackValue(FLua, I));
+  end;
+
+  if TopBefore <> FLua.Stack.Top then
+  begin
+    raise ELuaExecuteException.Create(
+      'Stack manipulation error triggered, was ' + IntToStr(TopBefore) + ' now is ' +
+      IntToStr(FLua.Stack.Top) + '.'#13#10'Inconsistent data, abort!'
+    );
   end;
 
   if FCount > 0 then
@@ -5575,7 +5918,7 @@ var
 begin
   Result:=False;
 
-  if (AExactLength AND (FCount = Length(ATypes))) OR (NOT AExactLength AND (Length(ATypes) >= FCount)) then
+  if (AExactLength AND (FCount = Length(ATypes))) OR (NOT AExactLength AND (FCount >= Length(ATypes))) then
   begin
     Result:=True;
 
@@ -5627,20 +5970,23 @@ end;
 procedure TLuaResults.ApplyToStack;
 var
   I: Integer;
+  Value: TLuaValue;
 begin
   for I:=0 to FValues.Count - 1 do
   begin
-    case FValues[I].Typ of
+    Value:=FValues[I];
+
+    case Value.Typ of
       ltNone: FLua.Stack.PushNil;
       ltNil: FLua.Stack.PushNil;
-      ltBoolean: FLua.Stack.PushBoolean(FValues[I].AsBool);
-      ltLightUserdata: FLua.Stack.PushPointer(FValues[I].AsPtr);
-      ltNumber: if FValues[I].IsInt then FLua.Stack.PushInteger(FValues[I].AsInt) else FLua.Stack.PushNumber(FValues[I].AsFloat);
-      ltString: FLua.Stack.PushString(FValues[I].AsStr);
-      ltTable: FValues[I].PushToStack;
-      ltFunction: FValues[I].PushToStack;
-      ltUserdata: FValues[I].PushToStack;
-      ltThread: FValues[I].PushToStack;
+      ltBoolean: FLua.Stack.PushBoolean(Value.AsBool);
+      ltLightUserdata: FLua.Stack.PushPointer(Value.AsPtr);
+      ltNumber: if Value.IsInt then FLua.Stack.PushInteger(Value.AsInt) else FLua.Stack.PushNumber(Value.AsFloat);
+      ltString: FLua.Stack.PushString(Value.AsStr);
+      ltTable: Value.PushToStack;
+      ltFunction: Value.PushToStack;
+      ltUserdata: Value.PushToStack;
+      ltThread: Value.PushToStack;
     end;
   end;
 end;
@@ -5662,7 +6008,7 @@ end;
 
 procedure TLuaResults.PushByStack(AIndex: Integer);
 begin
-  FValues.Add(TLuaValue.New(FLua, AIndex));
+  FValues.Add(TLuaValue.FromStackValue(FLua, AIndex));
 end;
 
 procedure TLuaResults.PushClass(AValue: TLuaClass);
@@ -5694,32 +6040,7 @@ procedure TLuaResults.PushValue(AValue: TLuaValue);
 begin
   if Assigned(AValue) then
   begin
-    if AValue.Lua.GetRefOwner = FLua.GetRefOwner then
-    begin
-      // Rebind shared-registry values to the destination state so object pushes land on the correct stack.
-      FValues.Add(TLuaValue.FromRefId(FLua, AValue.RefId));
-    end else
-    begin
-      case AValue.Typ of
-        ltNone,
-        ltNil:
-          PushNil;
-        ltBoolean:
-          PushBool(AValue.AsBool);
-        ltNumber:
-          if AValue.IsInt then
-            PushInt(AValue.AsInt)
-          else
-            PushFloat(AValue.AsFloat);
-        ltString:
-          PushStr(AValue.AsStr);
-        ltLightUserdata,
-        ltUserdata:
-          FValues.Add(TLuaValue.FromValue(FLua, AValue.AsPtr));
-        else
-          raise ELuaException.Create('Cannot forward complex values across unrelated Lua states.');
-      end;
-    end;
+    FValues.Add(CloneLuaValueForLua(FLua, AValue));
   end else
   begin
     PushNil;

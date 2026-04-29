@@ -13,6 +13,7 @@ This repository now includes:
 - `Source/` - framework source (`Lua.pas`, `LuaAPI.pas`)
 - `Demo/` - VCL sample application
 - `Tests/` - console regression project
+- `Benchmarks/` - console benchmark project
 - `Dll/` - Lua 5.5.0 C sources / DLL build assets
 - `Runtime/` - canonical Lua runtime libraries used by the scripts
 - `Bin/` - platform-specific build output folders
@@ -49,6 +50,14 @@ Build the regression suite:
 ./build.sh Tests/TLuaTests.dpr Linux64
 ```
 
+Build the benchmark suite:
+
+```bash
+./build.sh Benchmarks/TLuaBenchmarks.dpr Win64
+./build.sh Benchmarks/TLuaBenchmarks.dpr Win32
+./build.sh Benchmarks/TLuaBenchmarks.dpr Linux64
+```
+
 The script auto-adds the repo `Source` directory to the compiler search path, selects the matching Delphi compiler for `Win32` or `Win64`, or `fpc` for `Linux64`, refreshes the canonical runtime library under `Runtime/`, and emits runnable outputs into `Bin/Win32`, `Bin/Win64`, or `Bin/Linux64`.
 
 Build the regression suite in static mode:
@@ -80,6 +89,14 @@ Compile and run the console regression suite:
 DELPHI_DEFINES=LUA_STATIC ./test.sh Tests/TLuaTests.dpr Win64
 ```
 
+Compile and run the benchmark suite:
+
+```bash
+./bench.sh Win64
+./bench.sh Win32
+./bench.sh Linux64
+```
+
 Platform outputs now land in:
 
 - `Bin/Win64`
@@ -100,6 +117,9 @@ Current coverage includes:
 - inheritance helpers, return propagation, and Lua-defined child overrides
 - allocator-backed memory tracking growth
 - blueprint-based class binding
+- benchmark coverage for callback and invoker hot paths
+
+Benchmark details: [Docs/benchmarking.md](Docs/benchmarking.md)
 
 Details: [Docs/testing.md](Docs/testing.md)
 
