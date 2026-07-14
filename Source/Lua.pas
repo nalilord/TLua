@@ -4937,13 +4937,17 @@ end;
 function TLua.Execute: Boolean;
 var
   Res: Integer;
+  ScriptSource: AnsiString;
+  ScriptName: AnsiString;
 begin
   Res:=0;
   Result:=False;
   ClearLastError;
 
   try
-    Res:=luaL_loadbuffer(FState, PAnsiChar(AnsiString(Trim(FScriptSource.Text))), Trim(FScriptSource.Text).Length, PAnsiChar(AnsiString(FScriptName)));
+    ScriptSource:=AnsiString(Trim(FScriptSource.Text));
+    ScriptName:=AnsiString(FScriptName);
+    Res:=luaL_loadbuffer(FState, PAnsiChar(ScriptSource), Length(ScriptSource), PAnsiChar(ScriptName));
 
     case Res of
       LUA_ERRSYNTAX: raise ELuaLoadException.Create('Syntax error during precompilation');

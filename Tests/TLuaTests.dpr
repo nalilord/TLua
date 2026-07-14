@@ -63,6 +63,7 @@ type
     procedure TestTables;
     procedure TestLibraries;
     procedure TestThreads;
+    procedure TestMultibyteScriptText;
     procedure TestErrorHandling;
     procedure TestLoadSource;
     procedure TestInheritance;
@@ -419,6 +420,33 @@ begin
   finally
     LuaState.UnregisterErrorHandler(Handler);
     LuaState.Free;
+  end;
+end;
+
+procedure TLuaRegressionSuite.TestMultibyteScriptText;
+var
+  LuaState: TLua;
+  PreviousCodePage: Word;
+begin
+  LuaState:=nil;
+  PreviousCodePage:=DefaultSystemCodePage;
+  SetMultiByteConversionCodePage(65001);
+  try
+    LuaState:=TLua.Create;
+    LuaState.ScriptText:=
+      'local text = "test' + #$6D4B + #$8BD5 + '"' + sLineBreak +
+      'multibyte_string_value = "abc"';
+    AssertTrue(LuaState.Execute, 'Script text with multibyte string characters should execute successfully.');
+    AssertEqual('abc', VarToStr(LuaState.Globals['multibyte_string_value']), 'Multibyte string script was truncated.');
+
+    LuaState.ScriptText:=
+      '-- ' + #$6D4B + #$8BD5 + sLineBreak +
+      'multibyte_comment_value = "def"';
+    AssertTrue(LuaState.Execute, 'Script text with multibyte comment characters should execute successfully.');
+    AssertEqual('def', VarToStr(LuaState.Globals['multibyte_comment_value']), 'Multibyte comment script was truncated.');
+  finally
+    LuaState.Free;
+    SetMultiByteConversionCodePage(PreviousCodePage);
   end;
 end;
 
@@ -783,6 +811,7 @@ begin
   RunTest('Tables', TestTables);
   RunTest('Libraries', TestLibraries);
   RunTest('Threads', TestThreads);
+  RunTest('Multibyte script text', TestMultibyteScriptText);
   RunTest('Error handling', TestErrorHandling);
   RunTest('LoadSource', TestLoadSource);
   RunTest('Inheritance', TestInheritance);
